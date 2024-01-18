@@ -84,8 +84,14 @@ def laplacian_g(f, dx, dy):
         (f[...,2:,1:-1] + f[...,:-2,1:-1] - 2*f[...,1:-1,1:-1]) / dx**2 \
       + (f[...,1:-1,2:] + f[...,1:-1,:-2] - 2*f[...,1:-1,1:-1]) / dy**2,
         (1,1,1,1), mode='constant', value=0.)
-        
 
+def magnitude(u):
+    """Calculates the magnitude of grid data"""
+    return  torch.sqrt( torch.sum(u*u) )
+
+def dot(u,v):
+    """Performs dot product on grid data"""
+    return torch.sum( u*v )
 
 class NMA:
     def __init__(self, param):
@@ -115,8 +121,8 @@ class NMA:
         self.neumann_modes = torch.zeros((self.nmodes,self.nx, self.ny), **self.arr_kwargs)
         self.dirichlet_modes = torch.zeros((self.nmodes,self.nx-1, self.ny-1), **self.arr_kwargs)
 
-        self.f_g = torch.ones((self.nx, self.ny), **self.arr_kwargs) # function on the vorticity grid
-        self.f_c = torch.ones((self.nx-1, self.ny-1), **self.arr_kwargs) # function on the tracer grid
+        #self.f_g = torch.ones((self.nx, self.ny), **self.arr_kwargs) # function on the vorticity grid
+        #self.f_c = torch.ones((self.nx-1, self.ny-1), **self.arr_kwargs) # function on the tracer grid
 
         # The default vorticity mask sets the numerical boundaries to 0
         self.mask_g = torch.ones((self.nx, self.ny), **self.arr_kwargs) # mask on the vorticity grid
@@ -135,9 +141,60 @@ class NMA:
             print('Need torch >= 2.0 to use torch.compile, current version '
                  f'{torch.__version__}, the solver will be slower! ')
 
-    def apply_laplacian_g(self):
-        fm_g = self.mask_g*self.f_g
+    def apply_laplacian_g(self,f):
+        fm_g = self.mask_g*f
         return self.laplacian_g(fm_g,self.dx,self.dy)
+
+    def laplacian_g_inverse(
+        self, b, s0, pcitermax=20, pctolerance=1e-2, itermax=1500, tolerance=1e-4, shift=0.0
+    ):
+        """Uses preconditioned conjugate gradient to solve L s = b,
+        where `L s` is the Laplacian on vorticity points applied to s
+        Stopping criteria is when the relative change in the solution is
+        less than the tolerance.
+
+        Algorithm taken from pg.51 of
+        https://www.cs.cmu.edu/~quake-papers/painless-conjugate-gradient.pdf
+
+        """
+        import numpy as np
+
+        sk = s0 * self.mask_g
+        r = (b - self.apply_laplacian_g(sk))*self.mask_g
+
+        d = r # preconditioner solve elf.LapZInv_JacobiSolve(r, itermax=pcitermax, tolerance=pctolerance, shift=shift)
+
+        delta = dot(r,d)
+        rmag = magnitude(r)
+        r0 = rmag
+
+        for k in range(0, itermax):
+            q = (self.apply_laplacian_g(d))*self.mask_g
+
+            alpha = delta / dot(d,q) 
+
+            sk += alpha * d
+            if k % 50 == 0:
+                r = (b - self.apply_laplacian_g(sk))*self.mask_g
+            else:
+                r -= alpha*q
+ 
+            x = r ## preconditioner solve self.LapZInv_JacobiSolve(r, itermax=pcitermax, tolerance=pctolerance, shift=shift)
+
+            rmag = magnitude(r)
+            deltaOld = delta
+            delta = dot(r,x)
+            beta = delta / deltaOld
+            d = x + beta * d
+            if rmag <= tolerance*r0:
+                break
+
+        if rmag > tolerance*r0:
+            print(
+                f"Conjugate gradient method did not converge in {k+1} iterations : {delta}"
+            )
+
+        return sk
 
 
 if __name__ == '__main__':
@@ -146,28 +203,15 @@ if __name__ == '__main__':
     import numpy as np
     import matplotlib.pyplot as plt
 
-    param = {'nx': 10,
-             'ny': 10,
+    param = {'nx': 100,
+             'ny': 100,
              'Lx': 1.0,
              'Ly': 1.0,
              'nmodes': 80,
              'device': 'cuda'}
    
     model = NMA(param)
-
-    del2f = model.apply_laplacian_g().cpu().numpy()
-    print(del2f.shape)
-    f,a = plt.subplots(1,1)
-    um, uM = -1.1*np.abs(del2f).max(), 1.1*np.abs(del2f).max()
-    im = a.imshow(del2f.T, cmap='bwr', origin='lower', vmin=um, vmax=uM, animated=True,extent=[0,param['Lx'],0,param['Ly']], aspect=param['Lx']/param['Ly'])
-    f.colorbar(im, ax=a,fraction=0.046,location='bottom')
-    a.set_title('del2(f_g)')
-    plt.tight_layout()
-    plt.savefig('del2f_g.png')
-
-
-
-
+    
     
     # # def save(self, filename):
     # #     """Saves the model and eigenpairs to npz file"""
