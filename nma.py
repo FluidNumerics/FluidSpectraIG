@@ -82,6 +82,8 @@ def laplacian_g(f, dx, dy):
     boundary conditions. Function values are assumed to be masked prior
     to calling this method. Additionally, the laplacian is returned
     as zero numerical boundaries"""
+    # function adapted from github.com/louity/MQGeometry
+    # Copyright (c) 2023 louity
     return F.pad(
         (f[...,2:,1:-1] + f[...,:-2,1:-1] - 2*f[...,1:-1,1:-1]) / dx**2 \
       + (f[...,1:-1,2:] + f[...,1:-1,:-2] - 2*f[...,1:-1,1:-1]) / dy**2,
@@ -128,17 +130,6 @@ class NMA:
 
         # auxillary matrices for elliptic equation
         self.compute_auxillary_matrices()
-        #self.f_g = torch.ones((self.nx, self.ny), **self.arr_kwargs) # function on the vorticity grid
-        #self.f_c = torch.ones((self.nx-1, self.ny-1), **self.arr_kwargs) # function on the tracer grid
-
-        # # The default vorticity mask sets the numerical boundaries to 0
-        # self.mask_g = torch.ones((self.nx, self.ny), **self.arr_kwargs) # mask on the vorticity grid
-        # self.mask_g[:,0] = 0.0
-        # self.mask_g[:,-1] = 0.0
-        # self.mask_g[0,:] = 0.0
-        # self.mask_g[-1,:] = 0.0
-        # #self.mask_c = torch.ones((self.nx-1, self.ny-1), **self.arr_kwargs) # mask on the tracer grid
-
 
         # precompile torch functions
         comp =  torch.__version__[0] == '2'
@@ -151,7 +142,8 @@ class NMA:
                  f'{torch.__version__}, the solver will be slower! ')
 
     def compute_auxillary_matrices(self):
-
+        # function adapted from github.com/louity/MQGeometry
+        # Copyright (c) 2023 louity
         nx, ny = self.nx, self.ny
         laplace_dst = compute_laplace_dst(
                 nx, ny, self.dx, self.dy, self.arr_kwargs).unsqueeze(0).unsqueeze(0)
@@ -181,6 +173,8 @@ class NMA:
     def laplacian_g_inverse(self,b):
         """Inverts the laplacian with homogeneous dirichlet boundary conditions
         defined on the vorticity points"""
+        # function adapted from github.com/louity/MQGeometry
+        # Copyright (c) 2023 louity
         
         if self.cap_matrices is not None:
             return solve_helmholtz_dst_cmm(
