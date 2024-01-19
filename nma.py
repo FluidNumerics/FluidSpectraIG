@@ -20,13 +20,13 @@
 #   arakawa c-grid (z-points below).
 #
 #
-#   Vorticity points are in the range (0:nx-1,0:ny-1) [nx, ny] grid points
+#   Vorticity points are in the range (0:nx,0:ny) [nx+1, ny+1] grid points
 #   Boundary values for the vorticity 
 #
 #   Vorticity points are suffixed with "g", e.g. "xg" and "yg" refer to
 #   zonal and meridional positions at vorticity points   
 #
-#   Tracer points have a range of (0,nx-2,0:ny-2) [nx-1,ny-1] grid points
+#   Tracer points have a range of (0,nx-1,0:ny-1) [nx,ny] grid points
 #   
 #   Tracer points are suffixed with "c", e.g. "xc" and "yc" refer to
 #   zonal and meridional positions at tracer points   
@@ -59,11 +59,13 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from fd import grad_perp, interp_TP, laplacian_h
+from helmholtz import compute_laplace_dst, solve_helmholtz_dst, \
+                      solve_helmholtz_dst_cmm, compute_capacitance_matrices
+from masks import Masks
+
 zeroTol = 1e-12
 
-def grad_perp(f, dx, dy):
-    """Orthogonal gradient"""
-    return (f[...,:-1] - f[...,1:]) / dy, (f[...,1:,:] - f[...,:-1,:]) / dx
 
 def laplacian_c(f, dx, dy):
     """2-D laplacian on the tracer points. On tracer points, we are
@@ -107,94 +109,143 @@ class NMA:
         self.arr_kwargs = {'dtype':torch.float64, 'device':self.device}
 
         # grid
-        self.xg, self.yg = torch.meshgrid(torch.linspace(0, self.Lx, self.nx, **self.arr_kwargs),
-                                        torch.linspace(0, self.Ly, self.ny, **self.arr_kwargs),
+        self.xg, self.yg = torch.meshgrid(torch.linspace(0, self.Lx, self.nx+1, **self.arr_kwargs),
+                                        torch.linspace(0, self.Ly, self.ny+1, **self.arr_kwargs),
                                         indexing='ij')
 
-        self.dx = self.Lx / (self.nx-1)
-        self.dy = self.Ly / (self.ny-1)
+        self.dx = torch.tensor(self.Lx / self.nx, **self.arr_kwargs)
+        self.dy = torch.tensor(self.Ly / self.ny, **self.arr_kwargs)
 
-        self.xc, self.yc = torch.meshgrid(torch.linspace(self.dx*0.5, self.Lx-self.dx*0.5, self.nx-1, **self.arr_kwargs),
-                                        torch.linspace(self.dy*0.5, self.Ly-self.dy*0.5, self.ny-1, **self.arr_kwargs),
+        self.xc, self.yc = torch.meshgrid(torch.linspace(self.dx*0.5, self.Lx-self.dx*0.5, self.nx, **self.arr_kwargs),
+                                        torch.linspace(self.dy*0.5, self.Ly-self.dy*0.5, self.ny, **self.arr_kwargs),
                                         indexing='ij')
 
-        self.neumann_modes = torch.zeros((self.nmodes,self.nx, self.ny), **self.arr_kwargs)
-        self.dirichlet_modes = torch.zeros((self.nmodes,self.nx-1, self.ny-1), **self.arr_kwargs)
+        self.neumann_modes = torch.zeros((self.nmodes,self.nx, self.ny), **self.arr_kwargs) # on tracer points
+        self.dirichlet_modes = torch.zeros((self.nmodes,self.nx+1, self.ny+1), **self.arr_kwargs) # on vorticity points
 
+        mask = param['mask'] if 'mask' in param.keys()  else torch.ones(self.nx, self.ny)
+        self.masks = Masks(mask.type(torch.float64).to(self.device))
+
+        # auxillary matrices for elliptic equation
+        self.compute_auxillary_matrices()
         #self.f_g = torch.ones((self.nx, self.ny), **self.arr_kwargs) # function on the vorticity grid
         #self.f_c = torch.ones((self.nx-1, self.ny-1), **self.arr_kwargs) # function on the tracer grid
 
-        # The default vorticity mask sets the numerical boundaries to 0
-        self.mask_g = torch.ones((self.nx, self.ny), **self.arr_kwargs) # mask on the vorticity grid
-        self.mask_g[:,0] = 0.0
-        self.mask_g[:,-1] = 0.0
-        self.mask_g[0,:] = 0.0
-        self.mask_g[-1,:] = 0.0
-        #self.mask_c = torch.ones((self.nx-1, self.ny-1), **self.arr_kwargs) # mask on the tracer grid
+        # # The default vorticity mask sets the numerical boundaries to 0
+        # self.mask_g = torch.ones((self.nx, self.ny), **self.arr_kwargs) # mask on the vorticity grid
+        # self.mask_g[:,0] = 0.0
+        # self.mask_g[:,-1] = 0.0
+        # self.mask_g[0,:] = 0.0
+        # self.mask_g[-1,:] = 0.0
+        # #self.mask_c = torch.ones((self.nx-1, self.ny-1), **self.arr_kwargs) # mask on the tracer grid
 
 
         # precompile torch functions
         comp =  torch.__version__[0] == '2'
-        self.grad_perp = torch.compile(grad_perp) if comp else grad_perp
         self.laplacian_g = torch.compile(laplacian_g) if comp else laplacian_g
+        self.grad_perp = torch.compile(grad_perp) if comp else grad_perp
+        self.interp_TP = torch.compile(interp_TP) if comp else interp_TP
+        self.laplacian_h = torch.compile(laplacian_h) if comp else laplacian_h
         if not comp:
             print('Need torch >= 2.0 to use torch.compile, current version '
                  f'{torch.__version__}, the solver will be slower! ')
 
+    def compute_auxillary_matrices(self):
+
+        nx, ny = self.nx, self.ny
+        laplace_dst = compute_laplace_dst(
+                nx, ny, self.dx, self.dy, self.arr_kwargs).unsqueeze(0).unsqueeze(0)
+        self.helmholtz_dst =  laplace_dst
+
+        # homogeneous Helmholtz solutions
+        cst = torch.ones((1, nx+1, ny+1), **self.arr_kwargs)
+        if len(self.masks.psi_irrbound_xids) > 0:
+            self.cap_matrices = compute_capacitance_matrices(
+                self.helmholtz_dst, self.masks.psi_irrbound_xids,
+                self.masks.psi_irrbound_yids)
+            sol = solve_helmholtz_dst_cmm(
+                    (cst*self.masks.psi)[...,1:-1,1:-1],
+                    self.helmholtz_dst, self.cap_matrices,
+                    self.masks.psi_irrbound_xids,
+                    self.masks.psi_irrbound_yids,
+                    self.masks.psi)
+        else:
+            self.cap_matrices = None
+            sol = solve_helmholtz_dst(cst[...,1:-1,1:-1], self.helmholtz_dst)
+
+        # self.homsol = cst + sol * self.lambda_sq
+        # self.homsol_mean = (
+        #         interp_TP(self.homsol)*self.masks.q).mean((-1,-2), keepdim=True)
+        self.helmholtz_dst = self.helmholtz_dst.type(torch.float32)
+
+    def laplacian_g_inverse(self,b):
+        """Inverts the laplacian with homogeneous dirichlet boundary conditions
+        defined on the vorticity points"""
+        
+        if self.cap_matrices is not None:
+            return solve_helmholtz_dst_cmm(
+                    b[...,1:-1,1:-1]*self.masks.psi[...,1:-1,1:-1],
+                    self.helmholtz_dst, self.cap_matrices,
+                    self.masks.psi_irrbound_xids,
+                    self.masks.psi_irrbound_yids,
+                    self.masks.psi)
+        else:
+            return solve_helmholtz_dst(b[...,1:-1,1:-1], self.helmholtz_dst)
+
     def apply_laplacian_g(self,f):
-        fm_g = self.mask_g*f
-        return self.laplacian_g(fm_g,self.dx,self.dy)
+        #fm_g = self.masks.psi*f
+        return self.masks.psi*self.laplacian_g(f,self.dx,self.dy)
 
-    def laplacian_g_inverse(
-        self, b, s0, pcitermax=20, pctolerance=1e-2, itermax=1500, tolerance=1e-4, shift=0.0
-    ):
-        """Uses preconditioned conjugate gradient to solve L s = b,
-        where `L s` is the Laplacian on vorticity points applied to s
-        Stopping criteria is when the relative change in the solution is
-        less than the tolerance.
+    # def laplacian_g_inverse(
+    #     self, b, pcitermax=20, pctolerance=1e-2, itermax=1500, tolerance=1e-4, shift=0.0
+    # ):
+    #     """Uses preconditioned conjugate gradient to solve L s = b,
+    #     where `L s` is the Laplacian on vorticity points applied to s
+    #     Stopping criteria is when the relative change in the solution is
+    #     less than the tolerance.
 
-        Algorithm taken from pg.51 of
-        https://www.cs.cmu.edu/~quake-papers/painless-conjugate-gradient.pdf
+    #     Algorithm taken from pg.51 of
+    #     https://www.cs.cmu.edu/~quake-papers/painless-conjugate-gradient.pdf
 
-        """
-        import numpy as np
+    #     """
+    #     import numpy as np
 
-        sk = s0 * self.mask_g
-        r = (b - self.apply_laplacian_g(sk))*self.mask_g
+    #     sk = torch.zeros_like(self.xg)
+    #     r = ((b - self.apply_laplacian_g(sk))*self.masks.psi).squeeze()
 
-        d = r # preconditioner solve elf.LapZInv_JacobiSolve(r, itermax=pcitermax, tolerance=pctolerance, shift=shift)
+    #     d = r # preconditioner solve elf.LapZInv_JacobiSolve(r, itermax=pcitermax, tolerance=pctolerance, shift=shift)
 
-        delta = dot(r,d)
-        rmag = magnitude(r)
-        r0 = rmag
+    #     delta = dot(r,d)
+    #     rmag = magnitude(r)
+    #     r0 = rmag
 
-        for k in range(0, itermax):
-            q = (self.apply_laplacian_g(d))*self.mask_g
+    #     for k in range(0, itermax):
+    #         q = (self.apply_laplacian_g(d))*self.masks.psi
 
-            alpha = delta / dot(d,q) 
+    #         alpha = delta / dot(d,q) 
 
-            sk += alpha * d
-            if k % 50 == 0:
-                r = (b - self.apply_laplacian_g(sk))*self.mask_g
-            else:
-                r -= alpha*q
+    #         sk += alpha * d
+    #         if k % 50 == 0:
+    #             r = (b - self.apply_laplacian_g(sk))*self.masks.psi
+    #         else:
+    #             r -= alpha*q
  
-            x = r ## preconditioner solve self.LapZInv_JacobiSolve(r, itermax=pcitermax, tolerance=pctolerance, shift=shift)
+    #         x = r ## preconditioner solve self.LapZInv_JacobiSolve(r, itermax=pcitermax, tolerance=pctolerance, shift=shift)
 
-            rmag = magnitude(r)
-            deltaOld = delta
-            delta = dot(r,x)
-            beta = delta / deltaOld
-            d = x + beta * d
-            if rmag <= tolerance*r0:
-                break
+    #         rmag = magnitude(r)
+    #         deltaOld = delta
+    #         delta = dot(r,x)
+    #         beta = delta / deltaOld
+    #         d = x + beta * d
+    #         if rmag <= tolerance*r0:
+    #             break
 
-        if rmag > tolerance*r0:
-            print(
-                f"Conjugate gradient method did not converge in {k+1} iterations : {delta}"
-            )
+    #     if rmag > tolerance*r0:
+    #         print(
+    #             f"Conjugate gradient method did not converge in {k+1} iterations : {delta}"
+    #         )
 
-        return sk
+    #     return sk
 
 
 if __name__ == '__main__':
