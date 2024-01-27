@@ -179,6 +179,20 @@ class NMA:
         fm_g = self.masks.psi*f
         return self.masks.psi*self.laplacian_g(f,self.dx,self.dy)
         
+
+    def exact_dirichlet_modes(self, nmx, nmy):
+
+        nmodes = nmx*nmy
+        U = torch.zeros(sum((self.xg.shape, (nmodes,)), ()),**arr_kwargs)
+
+        for j in range(nmy):
+            h = torch.sin((j+1)*self.yg*torch.pi/self.Ly)
+            for i in range(nmx):
+                k=i+nmx*j
+                g = torch.sin((i+1)*self.xg*torch.pi/self.Lx)
+                U[...,k] = g*h
+        return U
+
     def calculate_dirichlet_modes(self, tol=1e-6, max_iter=100):
         """Uses IRAM to calcualte the N smallest eigenmodes,
         corresponding to the largest length scales, of the operator
@@ -187,9 +201,10 @@ class NMA:
         identity matrix """
 
         # need an initial guess generator that 
-        # creates a function that contains data similar
-        # to the modes we're looking for.
-        v0 = torch.sin(self.xg*torch.pi/self.Lx)*torch.sin(self.yg*torch.pi/self.Ly) + torch.rand(self.xg.shape,**self.arr_kwargs) # generate seed vector on vorticity points
+        # creates a function that projects onto all of the modes we are looking for.
+        v0 = self.xg*(self.xg-self.Lx)*self.yg*(self.yg-self.Ly)
+        #torch.sin(self.xg*torch.pi/self.Lx)*torch.sin(self.yg*torch.pi/self.Ly) + 
+        #v0 = self.xg*(self.xg-self.Lx)*self.yg*(self.yg-self.Ly)+torch.rand(self.xg.shape,**self.arr_kwargs) # generate seed vector on vorticity points
         
         eigenvalues, eigenvectors, r = implicitly_restarted_arnoldi(self.laplacian_g_inverse, v0,
             self.nmodes, self.nkrylov, tol=tol, max_iter=max_iter, 
