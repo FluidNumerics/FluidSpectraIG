@@ -28,7 +28,6 @@ def implicitly_restarted_arnoldi(matrixaction, x, neigs, nkrylov, tol=1e-6, max_
     m = neigs # number of desired eigenvectors
 
     H = torch.zeros((k+1, k),**arr_kwargs)
-    Q = torch.zeros((k, k),**arr_kwargs)
     U = torch.zeros(sum((x.shape, (k+1,)), ()),**arr_kwargs)
     I = torch.eye(k,**arr_kwargs)
     
@@ -42,8 +41,6 @@ def implicitly_restarted_arnoldi(matrixaction, x, neigs, nkrylov, tol=1e-6, max_
 
     for iter in range(max_iter):
         
-        #print(f" rm({iter}) : {rm}")
-
         # Find the eigenvalues of H in order
         H_square = H[0:k,0:k]
         H_evals, H_evecs = torch.linalg.eig(H_square) # Eigenvalues are returned in ascending order
