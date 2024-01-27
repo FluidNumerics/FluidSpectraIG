@@ -2,7 +2,7 @@
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
-from nma import NMA
+from fluidspectraig.nma import NMA
 import time
 
 param = {'nx': 100,

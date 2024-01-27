@@ -59,11 +59,11 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from fd import grad_perp, interp_TP, laplacian_h
-from helmholtz import compute_laplace_dst, solve_helmholtz_dst, \
+from fluidspectraig.fd import grad_perp, interp_TP, laplacian_h
+from fluidspectraig.helmholtz import compute_laplace_dst, solve_helmholtz_dst, \
                       solve_helmholtz_dst_cmm, compute_capacitance_matrices
-from masks import Masks
-from mfeigen_torch import implicitly_restarted_arnoldi,arnoldi_iteration, norm, dot
+from fluidspectraig.masks import Masks
+from fluidspectraig.mfeigen_torch import implicitly_restarted_arnoldi,arnoldi_iteration, norm, dot
 
 zeroTol = 1e-12
 
