@@ -63,6 +63,7 @@ from fd import grad_perp, interp_TP, laplacian_h
 from helmholtz import compute_laplace_dst, solve_helmholtz_dst, \
                       solve_helmholtz_dst_cmm, compute_capacitance_matrices
 from masks import Masks
+from mfeigen_torch import implicitly_restarted_arnoldi,arnoldi_iteration, norm, dot
 
 zeroTol = 1e-12
 
@@ -89,13 +90,6 @@ def laplacian_g(f, dx, dy):
       + (f[...,1:-1,2:] + f[...,1:-1,:-2] - 2*f[...,1:-1,1:-1]) / dy**2,
         (1,1,1,1), mode='constant', value=0.)
 
-def magnitude(u):
-    """Calculates the magnitude of grid data"""
-    return  torch.sqrt( torch.sum(u*u) )
-
-def dot(u,v):
-    """Performs dot product on grid data"""
-    return torch.sum( u*v )
 
 class NMA:
     def __init__(self, param):
@@ -104,11 +98,9 @@ class NMA:
         self.ny = param['ny']
         self.Ly = param['Ly']
         self.nmodes = param['nmodes']
+        self.nkrylov = param['nkrylov']
         self.device = param['device']
         self.arr_kwargs = {'dtype':torch.float64, 'device': self.device}
-
-        
-        self.arr_kwargs = {'dtype':torch.float64, 'device':self.device}
 
         # grid
         self.xg, self.yg = torch.meshgrid(torch.linspace(0, self.Lx, self.nx+1, **self.arr_kwargs),
@@ -165,9 +157,6 @@ class NMA:
             self.cap_matrices = None
             sol = solve_helmholtz_dst(cst[...,1:-1,1:-1], self.helmholtz_dst)
 
-        # self.homsol = cst + sol * self.lambda_sq
-        # self.homsol_mean = (
-        #         interp_TP(self.homsol)*self.masks.q).mean((-1,-2), keepdim=True)
         self.helmholtz_dst = self.helmholtz_dst.type(torch.float32)
 
     def laplacian_g_inverse(self,b):
@@ -187,60 +176,26 @@ class NMA:
             return solve_helmholtz_dst(b[...,1:-1,1:-1], self.helmholtz_dst)
 
     def apply_laplacian_g(self,f):
-        #fm_g = self.masks.psi*f
+        fm_g = self.masks.psi*f
         return self.masks.psi*self.laplacian_g(f,self.dx,self.dy)
+        
+    def calculate_dirichlet_modes(self, tol=1e-6, max_iter=100):
+        """Uses IRAM to calcualte the N smallest eigenmodes,
+        corresponding to the largest length scales, of the operator
+        (L - sI), where L is the laplacian with homogeneous dirichlet
+        boundary conditions, s is a scalar shift, and I is the 
+        identity matrix """
 
-    # def laplacian_g_inverse(
-    #     self, b, pcitermax=20, pctolerance=1e-2, itermax=1500, tolerance=1e-4, shift=0.0
-    # ):
-    #     """Uses preconditioned conjugate gradient to solve L s = b,
-    #     where `L s` is the Laplacian on vorticity points applied to s
-    #     Stopping criteria is when the relative change in the solution is
-    #     less than the tolerance.
+        # need an initial guess generator that 
+        # creates a function that contains data similar
+        # to the modes we're looking for.
+        v0 = torch.sin(self.xg*torch.pi/self.Lx)*torch.sin(self.yg*torch.pi/self.Ly) + torch.rand(self.xg.shape,**self.arr_kwargs) # generate seed vector on vorticity points
+        
+        eigenvalues, eigenvectors, r = implicitly_restarted_arnoldi(self.laplacian_g_inverse, v0,
+            self.nmodes, self.nkrylov, tol=tol, max_iter=max_iter, 
+            arr_kwargs = self.arr_kwargs)
 
-    #     Algorithm taken from pg.51 of
-    #     https://www.cs.cmu.edu/~quake-papers/painless-conjugate-gradient.pdf
-
-    #     """
-    #     import numpy as np
-
-    #     sk = torch.zeros_like(self.xg)
-    #     r = ((b - self.apply_laplacian_g(sk))*self.masks.psi).squeeze()
-
-    #     d = r # preconditioner solve elf.LapZInv_JacobiSolve(r, itermax=pcitermax, tolerance=pctolerance, shift=shift)
-
-    #     delta = dot(r,d)
-    #     rmag = magnitude(r)
-    #     r0 = rmag
-
-    #     for k in range(0, itermax):
-    #         q = (self.apply_laplacian_g(d))*self.masks.psi
-
-    #         alpha = delta / dot(d,q) 
-
-    #         sk += alpha * d
-    #         if k % 50 == 0:
-    #             r = (b - self.apply_laplacian_g(sk))*self.masks.psi
-    #         else:
-    #             r -= alpha*q
- 
-    #         x = r ## preconditioner solve self.LapZInv_JacobiSolve(r, itermax=pcitermax, tolerance=pctolerance, shift=shift)
-
-    #         rmag = magnitude(r)
-    #         deltaOld = delta
-    #         delta = dot(r,x)
-    #         beta = delta / deltaOld
-    #         d = x + beta * d
-    #         if rmag <= tolerance*r0:
-    #             break
-
-    #     if rmag > tolerance*r0:
-    #         print(
-    #             f"Conjugate gradient method did not converge in {k+1} iterations : {delta}"
-    #         )
-
-    #     return sk
-
+        return eigenvalues, eigenvectors, r
 
 if __name__ == '__main__':
 
