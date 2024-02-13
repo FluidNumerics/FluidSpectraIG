@@ -63,7 +63,7 @@ from fluidspectraig.fd import grad_perp, interp_TP, laplacian_h
 from fluidspectraig.helmholtz import compute_laplace_dst, solve_helmholtz_dst, \
                       solve_helmholtz_dst_cmm, compute_capacitance_matrices
 from fluidspectraig.masks import Masks
-from fluidspectraig.mfeigen_torch import implicitly_restarted_arnoldi,arnoldi_iteration, norm, dot
+from fluidspectraig.mfeigen_torch import implicitly_restarted_arnoldi,norm, dot
 
 zeroTol = 1e-12
 
@@ -193,7 +193,7 @@ class NMA:
                 U[...,k] = g*h
         return U
 
-    def calculate_dirichlet_modes(self, tol=1e-6, max_iter=100):
+    def calculate_dirichlet_modes(self, tol=1e-12, max_iter=100):
         """Uses IRAM to calcualte the N smallest eigenmodes,
         corresponding to the largest length scales, of the operator
         (L - sI), where L is the laplacian with homogeneous dirichlet
@@ -203,13 +203,12 @@ class NMA:
         # need an initial guess generator that 
         # creates a function that projects onto all of the modes we are looking for.
         v0 = self.xg*(self.xg-self.Lx)*self.yg*(self.yg-self.Ly)
-        #torch.sin(self.xg*torch.pi/self.Lx)*torch.sin(self.yg*torch.pi/self.Ly) + 
-        #v0 = self.xg*(self.xg-self.Lx)*self.yg*(self.yg-self.Ly)+torch.rand(self.xg.shape,**self.arr_kwargs) # generate seed vector on vorticity points
         
-        eigenvalues, eigenvectors, r = implicitly_restarted_arnoldi(self.laplacian_g_inverse, v0,
-            self.nmodes, self.nkrylov, tol=tol, max_iter=max_iter, 
+        evals, eigenvectors, r = implicitly_restarted_arnoldi(self.laplacian_g_inverse, v0,
+            self.nmodes, self.nkrylov, tol=tol, max_iter=max_iter,
             arr_kwargs = self.arr_kwargs)
 
+        eigenvalues = 1.0/evals
         return eigenvalues, eigenvectors, r
 
 if __name__ == '__main__':
