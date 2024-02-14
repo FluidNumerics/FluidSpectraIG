@@ -50,13 +50,13 @@ param = {'nx': 100,
          'Lx': 1.0,
          'Ly': 1.0,
          'nmodes': 20,
-         'nkrylov': 80,
+         'nkrylov': 40,
          'device': 'cuda'}
 
 model = NMA(param)
 
 tic = time.perf_counter()
-eigenvalues, eigenvectors, r = model.calculate_dirichlet_modes(tol=1e-32, max_iter=100)
+eigenvalues, eigenvectors, r = model.calculate_dirichlet_modes(tol=1e-8, max_iter=100)
 toc = time.perf_counter()
 
 runtime = toc - tic
