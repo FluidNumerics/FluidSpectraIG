@@ -45,18 +45,18 @@ def DirichletModes( model ):
     return eigenvalues, eigenmodes
 
 
-param = {'nx': 100,
-         'ny': 100,
+param = {'nx': 80,
+         'ny': 80,
          'Lx': 1.0,
          'Ly': 1.0,
-         'nmodes': 20,
-         'nkrylov': 40,
+         'nmodes':  80,
+         'nkrylov': 100,
          'device': 'cuda'}
 
 model = NMA(param)
 
 tic = time.perf_counter()
-eigenvalues, eigenvectors, r = model.calculate_dirichlet_modes(tol=1e-8, max_iter=100)
+eigenvalues, eigenvectors, r = model.calculate_dirichlet_modes(tol=1e-9, max_iter=100)
 toc = time.perf_counter()
 
 runtime = toc - tic
@@ -65,10 +65,16 @@ print(f"Dirichlet mode runtime : {runtime} s")
 
 d_eigenvalues, d_eigenvectors = DirichletModes(model)
 
+me = min(d_eigenvalues[0:param['nmodes']])
+Me = max(d_eigenvalues[0:param['nmodes']])
 plt.figure()
 plt.title(f"Eigenvalues {model.nx} x {model.ny}")
-plt.plot(np.abs(d_eigenvalues[0:param['nmodes']]),'-o',label = 'dirichlet (exact)', markersize=3, linewidth=1 )
-plt.plot(np.abs(eigenvalues.cpu().numpy()),'-x',label = 'dirichlet (numerical)', markersize=4, linewidth=1 )
+plt.plot(np.abs(d_eigenvalues[0:param['nmodes']]), np.abs(eigenvalues.cpu().numpy()),'o',label = 'dirichlet', markersize=3, linewidth=1 )
+plt.plot([me,Me], [me,Me], 'g--',label = 'match', markersize=3, linewidth=1 )
+
+plt.xlabel("Exact")
+plt.ylabel("Numerical")
+
 plt.legend(loc='upper left')
 plt.grid(color='gray', linestyle='--', linewidth=0.5)
 plt.savefig(f"eigenvalues-{model.nx}_{param['nmodes']}.png")

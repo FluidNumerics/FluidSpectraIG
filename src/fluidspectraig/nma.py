@@ -63,7 +63,7 @@ from fluidspectraig.fd import grad_perp, interp_TP, laplacian_h
 from fluidspectraig.helmholtz import compute_laplace_dst, solve_helmholtz_dst, \
                       solve_helmholtz_dst_cmm, compute_capacitance_matrices
 from fluidspectraig.masks import Masks
-from fluidspectraig.mfeigen_torch import implicitly_restarted_arnoldi,implicitly_restarted_lanczos,norm, dot
+from fluidspectraig.mfeigen_torch import implicitly_restarted_lanczos,norm, dot
 
 zeroTol = 1e-12
 

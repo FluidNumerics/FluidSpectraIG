@@ -47,6 +47,26 @@ def compute_laplace_dst(nx, ny, dx, dy, arr_kwargs):
                           indexing='ij')
     return 2*(torch.cos(torch.pi/nx*x) - 1)/dx**2 + 2*(torch.cos(torch.pi/ny*y) - 1)/dy**2
 
+def dctI1D(x, norm='ortho'):
+    """1D type-I discrete cosine transform."""
+    return torch.fft.irfft(-1j*F.pad(x, (1,1)), dim=-1, norm=norm)[...,1:x.shape[-1]+1]
+
+
+def dctI2D(x, norm='ortho'):
+    """2D type-I discrete cosine transform."""
+    return dctI1D(dctI1D(x, norm=norm).transpose(-1,-2), norm=norm).transpose(-1,-2)
+
+
+def compute_laplace_dct(nx, ny, dx, dy, arr_kwargs):
+    """Discrete cosine transform of the 2D centered discrete laplacian
+    operator."""
+    x, y = torch.meshgrid(torch.arange(1,nx, **arr_kwargs),
+                          torch.arange(1,ny, **arr_kwargs),
+                          indexing='ij')
+    return 2*(torch.cos(torch.pi/nx*x) - 1)/dx**2 + 2*(torch.cos(torch.pi/ny*y) - 1)/dy**2
+
+
+
 
 def solve_helmholtz_dst(rhs, helmholtz_dst):
     return F.pad(dstI2D(dstI2D(rhs.type(helmholtz_dst.dtype)) / helmholtz_dst),
