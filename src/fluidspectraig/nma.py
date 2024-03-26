@@ -100,7 +100,8 @@ class NMA:
         self.nmodes = param['nmodes']
         self.nkrylov = param['nkrylov']
         self.device = param['device']
-        self.arr_kwargs = {'dtype':torch.float64, 'device': self.device}
+        self.dtype = param['dtype']
+        self.arr_kwargs = {'dtype':self.dtype, 'device': self.device}
 
         # grid
         self.xg, self.yg = torch.meshgrid(torch.linspace(0, self.Lx, self.nx+1, **self.arr_kwargs),
@@ -114,11 +115,11 @@ class NMA:
                                         torch.linspace(self.dy*0.5, self.Ly-self.dy*0.5, self.ny, **self.arr_kwargs),
                                         indexing='ij')
 
-        self.neumann_modes = torch.zeros((self.nmodes,self.nx, self.ny), **self.arr_kwargs) # on tracer points
+        self.neumann_modes = torch.zeros((self.nmodes,self.nx, self.ny), **self.arr_kwargs) # on tracer points; tracer points north and east of vorticity points by half grid cell
         self.dirichlet_modes = torch.zeros((self.nmodes,self.nx+1, self.ny+1), **self.arr_kwargs) # on vorticity points
 
         mask = param['mask'] if 'mask' in param.keys()  else torch.ones(self.nx, self.ny)
-        self.masks = Masks(mask.type(torch.float64).to(self.device))
+        self.masks = Masks(mask.type(self.dtype).to(self.device))
 
         # auxillary matrices for elliptic equation
         self.compute_auxillary_matrices()
@@ -147,6 +148,7 @@ class NMA:
             self.cap_matrices = compute_capacitance_matrices(
                 self.helmholtz_dst, self.masks.psi_irrbound_xids,
                 self.masks.psi_irrbound_yids)
+
             sol = solve_helmholtz_dst_cmm(
                     (cst*self.masks.psi)[...,1:-1,1:-1],
                     self.helmholtz_dst, self.cap_matrices,
@@ -157,7 +159,7 @@ class NMA:
             self.cap_matrices = None
             sol = solve_helmholtz_dst(cst[...,1:-1,1:-1], self.helmholtz_dst)
 
-        self.helmholtz_dst = self.helmholtz_dst.type(torch.float32)
+        self.helmholtz_dst = self.helmholtz_dst.type(self.dtype)
 
     def laplacian_g_inverse(self,b):
         """Inverts the laplacian with homogeneous dirichlet boundary conditions
@@ -194,22 +196,20 @@ class NMA:
         return U
 
     def calculate_dirichlet_modes(self, tol=1e-12, max_iter=100):
-        """Uses IRAM to calcualte the N smallest eigenmodes,
-        corresponding to the largest length scales, of the operator
-        (L - sI), where L is the laplacian with homogeneous dirichlet
-        boundary conditions, s is a scalar shift, and I is the 
-        identity matrix """
+        """Uses IRLM to calcualte the N smallest eigenmodes, corresponding to the 
+        largest length scales, of the Laplacian operator with homogeneous dirichlet
+        boundary conditions."""
 
-        # need an initial guess generator that 
-        # creates a function that projects onto all of the modes we are looking for.
+        # create an initial guess/seed vector for IRLM
         v0 = self.xg*(self.xg-self.Lx)*self.yg*(self.yg-self.Ly)
         
-        evals, eigenvectors, r = implicitly_restarted_lanczos(self.laplacian_g_inverse, v0,
+        evals, eigenvectors, r, last_iterate = implicitly_restarted_lanczos(self.laplacian_g_inverse, v0,
             self.nmodes, self.nkrylov, tol=tol, max_iter=max_iter,
             arr_kwargs = self.arr_kwargs)
 
         eigenvalues = 1.0/evals
-        return eigenvalues, eigenvectors, r
+
+        return eigenvalues, eigenvectors, r, last_iterate
 
 if __name__ == '__main__':
 

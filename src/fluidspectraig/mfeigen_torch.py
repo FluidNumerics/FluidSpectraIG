@@ -17,7 +17,42 @@ def dot(u,v):
     return torch.sum( u*v )
 
 def implicitly_restarted_lanczos(matrixaction, x, neigs, nkrylov, tol=1e-12, max_iter=100, arr_kwargs = {'dtype':torch.float64, 'device':'cpu'}):
+    """Implicitly Restarted Lanczos Method (IRLM)
+    This method applies the Implicitly Restarted Lanczos Method (IRLM) using a matrix-free
+    method for applying the matrix action. Implicit restarts are applied by filtering out
+    the eigenmodes in the Kryolv space associated with the smallest eigenvalues.
 
+    Arguments
+
+      matrixaction - A method that takes in data stored in a torch array of x.shape and returns a torch array
+                     of shape x.shape. This method is assumed to a linear operator whose matrix-form equivalent
+                     is a symmtric matrix
+
+      x            - A seed vector for the IRLM
+
+      neigs        - The number of eigenvalues/eigenmodes that you want to find
+
+      nkrylov      - The size of the Krylov vector search space. Must be larger than neigs
+
+      tol          - (default: 1e-12) The size of the Lanczos iteration truncation error that is used to terminate
+                     the IRLM.
+
+      max_iter     - (default: 100) The maximum number of iterations for the IRLM. The IRLM will return when either
+                     the max_iter is reached or when the truncation error is less than `tol`, whichever happens first.
+
+      arr_kwargs   - (default: {'dtype':torch.float64, 'device':'cpu'}) Torch object to specify the floating point 
+                     precision and the memory locality ('cpu' or 'cuda'). 
+
+    Output
+      eigenvalues  - Torch array of size [0:neigs] containing the eigenvalues (Ritz values) of the matrix 
+                     associated with the matrixaction method
+                      
+      eigenvectors - Torch array of size [(shape.x),0:neigs] containing the eigenmodes of the matrix associated with
+                     the matrixaction method
+
+      rm           - The truncation error norm
+      
+    """
     k = nkrylov # kyrlov search space size
     m = neigs # number of desired eigenvectors
 
@@ -38,13 +73,11 @@ def implicitly_restarted_lanczos(matrixaction, x, neigs, nkrylov, tol=1e-12, max
         # Find the eigenvalues of H in order
         H_square = H[0:k,0:k]
         H_evals, H_evecs = torch.linalg.eigh(H_square) # Eigenvalues are returned in ascending order
-        # H_evals = H_evals
-        # H_evecs = H_evecs
         
         # The residual of the calculation is taken as the norm of the
         # (m+1)-th column vector in the arnoldi iteration.
         rm = torch.abs(H[m,m-1]).cpu().numpy()
-        print(f"{iter}, {rm}")
+        print(f"{iter}, {rm}", flush=True)
         if rm < tol :
             print(f"IRAM converged in {iter} iterations.")
             # Compute the eigenpairs and return
@@ -54,7 +87,7 @@ def implicitly_restarted_lanczos(matrixaction, x, neigs, nkrylov, tol=1e-12, max
             for i in range(m):
                 v = eigenvectors[...,i]
                 eigenvectors[...,i] = v/norm(v)
-            return eigenvalues, eigenvectors, rm
+            return eigenvalues, eigenvectors, rm, iter
 
         # Otherwise, we continue our search
 
@@ -92,7 +125,7 @@ def implicitly_restarted_lanczos(matrixaction, x, neigs, nkrylov, tol=1e-12, max
     for i in range(m):
         v = eigenvectors[...,i]
         eigenvectors[...,i] = v/norm(v)
-    return eigenvalues, eigenvectors, rm
+    return eigenvalues, eigenvectors, rm, iter
 
 
 def lanczos_iteration(matrixaction, H, U, p, k):
