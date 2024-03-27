@@ -49,21 +49,18 @@ def pcg(matrixaction, preconditioner, x0, b, tol=1e-12, max_iter=100, arr_kwargs
       r - The max-norm residual ||b-Ax||
       
     """
-        
-    Ax = matrixaction(x0)
 
-    r = b - Ax
-
+    xk = x0 
+    r = b - matrixaction(xk)
     d = preconditioner(r)
 
     delta = dot(r,d)
     rmag = norm(r)
     bmag = norm(b)
     r0 = max(rmag, bmag)
-    xk = x0
 
-    for k in range(0, itermax):
-        q = matrixaction(x)
+    for k in range(0, max_iter):
+        q = matrixaction(d)
         alpha = delta / dot(d,q)
         xk += alpha * d
 
@@ -73,7 +70,7 @@ def pcg(matrixaction, preconditioner, x0, b, tol=1e-12, max_iter=100, arr_kwargs
             r -= alpha * q
 
         rmag = norm(r)
-        if rmag <= tolerance*r0 :
+        if rmag <= tol*r0 :
             break
 
         s = preconditioner(r)
@@ -83,7 +80,7 @@ def pcg(matrixaction, preconditioner, x0, b, tol=1e-12, max_iter=100, arr_kwargs
         d = s + beta * d
 
 
-    if rmag > tolerance*r0:
+    if rmag > tol*r0:
         print(
             f"Conjugate gradient method did not converge in {k+1} iterations : {rmag}"
         )
