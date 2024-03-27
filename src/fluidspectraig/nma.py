@@ -205,10 +205,10 @@ class NMA:
             return solve_helmholtz_dst(b[...,1:-1,1:-1], self.helmholtz_dst)
 
     def apply_laplacian_c(self,x):
-        return self.laplacian_c(x,self.dx,self.dy)
+        return self.laplacian_c(x,self.dx,self.dy)*self.masks.q.squeeze()
 
     def apply_laplacian_c_preconditioner(self,r):
-        return r
+        return r*self.masks.q.squeeze()
 
     def laplacian_c_inverse_pcg(self,b):
         """Inverts the laplacian with homogeneous neumann boundary conditions
@@ -219,7 +219,7 @@ class NMA:
         return pcg(self.apply_laplacian_c, 
                    self.apply_laplacian_c_preconditioner,
                    x0, b,tol=self.pcg_tol, max_iter=self.pcg_max_iter,
-                   arr_kwargs = self.arr_kwargs)
+                   arr_kwargs = self.arr_kwargs)*self.masks.q.squeeze()
 
     def apply_laplacian_g(self,f):
         fm_g = self.masks.psi.squeeze()*f # Mask the data to apply homogeneous dirichlet boundary conditions
@@ -247,7 +247,7 @@ class NMA:
         # create an initial guess/seed vector for IRLM
         v0 = self.xg*(self.xg-self.Lx)*self.yg*(self.yg-self.Ly)
         
-        evals, eigenvectors, r, last_iterate = implicitly_restarted_lanczos(self.laplacian_g_inverse, v0,
+        evals, eigenvectors, r, last_iterate = implicitly_restarted_lanczos(self.laplacian_g_inverse_pcg, v0,
             self.nmodes, self.nkrylov, tol=tol, max_iter=max_iter,
             arr_kwargs = self.arr_kwargs)
 
