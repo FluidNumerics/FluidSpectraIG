@@ -61,7 +61,8 @@ import torch.nn.functional as F
 
 from fluidspectraig.fd import grad_perp, interp_TP, laplacian_h
 from fluidspectraig.helmholtz import compute_laplace_dst, solve_helmholtz_dst, \
-                      solve_helmholtz_dst_cmm, compute_capacitance_matrices
+                      solve_helmholtz_dst_cmm, compute_dst_capacitance_matrices, \
+                      compute_laplace_dct, solve_helmholtz_dct
 from fluidspectraig.masks import Masks
 from fluidspectraig.mfeigen_torch import implicitly_restarted_lanczos,norm, dot
 from fluidspectraig.mfpcg_torch import pcg
@@ -81,7 +82,6 @@ def dfdx_u(f,dx):
     and returns a function on tracer-points."""
     return (f[...,1:,:]-f[...,:-1,:])/dx
 
-
 def dfdy_c(f,dy):
     """Calculates the y-derivative of a function on tracer points
     and returns a function on v-points. Homogeneous neumann boundary
@@ -100,7 +100,6 @@ def laplacian_c(f, dx, dy):
     working with the divergent modes, which are associated with neumann
     boundary conditions. """
     return dfdx_u( dfdx_c(f,dx), dx ) + dfdy_v( dfdy_c(f,dy), dy )
-
 
 def laplacian_g(f, dx, dy):
     """2-D laplacian on the vorticity points. On vorticity points, we are
@@ -125,9 +124,12 @@ class NMA:
         self.nkrylov = param['nkrylov']
         self.device = param['device']
         self.dtype = torch.float64
-        self.pcg_tol = 1e-12
-        self.pcg_max_iter = 1500
+        # self.pcg_tol = 1e-12
+        # self.pcg_max_iter = 1500
         self.arr_kwargs = {'dtype':self.dtype, 'device': self.device}
+
+        # self.n_neumann = 0
+        # self.n_dirichlet = 0
 
         # grid
         self.xg, self.yg = torch.meshgrid(torch.linspace(0, self.Lx, self.nx+1, **self.arr_kwargs),
@@ -141,8 +143,10 @@ class NMA:
                                         torch.linspace(self.dy*0.5, self.Ly-self.dy*0.5, self.ny, **self.arr_kwargs),
                                         indexing='ij')
 
-        self.neumann_modes = torch.zeros((self.nmodes,self.nx, self.ny), **self.arr_kwargs) # on tracer points; tracer points north and east of vorticity points by half grid cell
-        self.dirichlet_modes = torch.zeros((self.nmodes,self.nx+1, self.ny+1), **self.arr_kwargs) # on vorticity points
+        # self.neumann_modes = torch.zeros((self.nmodes,self.nx, self.ny), **self.arr_kwargs) # on tracer points; tracer points north and east of vorticity points by half grid cell
+        # self.neumann_evals = torch.zeros((self.nmodes), **self.arr_kwargs)
+        # self.dirichlet_modes = torch.zeros((self.nmodes,self.nx+1, self.ny+1), **self.arr_kwargs) # on vorticity points
+        # self.dirichlet_evals = torch.zeros((self.nmodes), **self.arr_kwargs)
 
         mask = param['mask'] if 'mask' in param.keys()  else torch.ones(self.nx, self.ny)
         self.masks = Masks(mask.type(self.dtype).to(self.device))
@@ -169,24 +173,90 @@ class NMA:
                 nx, ny, self.dx, self.dy, self.arr_kwargs).unsqueeze(0).unsqueeze(0)
         self.helmholtz_dst =  laplace_dst
 
+        laplace_dct = compute_laplace_dct(
+                nx, ny, self.dx, self.dy, self.arr_kwargs).unsqueeze(0).unsqueeze(0)
+        self.helmholtz_dct =  laplace_dct
+
         # homogeneous Helmholtz solutions
         cst = torch.ones((1, nx+1, ny+1), **self.arr_kwargs)
         if len(self.masks.psi_irrbound_xids) > 0:
-            self.cap_matrices = compute_capacitance_matrices(
+            self.cap_matrices_dst = compute_dst_capacitance_matrices(
                 self.helmholtz_dst, self.masks.psi_irrbound_xids,
                 self.masks.psi_irrbound_yids)
 
             sol = solve_helmholtz_dst_cmm(
                     (cst*self.masks.psi)[...,1:-1,1:-1],
-                    self.helmholtz_dst, self.cap_matrices,
+                    self.helmholtz_dst, self.cap_matrices_dst,
                     self.masks.psi_irrbound_xids,
                     self.masks.psi_irrbound_yids,
                     self.masks.psi)
         else:
-            self.cap_matrices = None
+            self.cap_matrices_dst = None
             sol = solve_helmholtz_dst(cst[...,1:-1,1:-1], self.helmholtz_dst)
 
+        self.cap_matrices_dct = None
+
         self.helmholtz_dst = self.helmholtz_dst.type(self.dtype)
+        self.helmholtz_dct = self.helmholtz_dct.type(self.dtype)
+
+    def apply_laplacian_c(self,x):
+        return self.laplacian_c(x,self.dx,self.dy)*self.masks.q.squeeze()
+
+    # def apply_laplacian_c_preconditioner(self,r):
+    #     return r*self.masks.q.squeeze()
+
+    # def laplacian_c_inverse_pcg(self,b):
+    #     """Inverts the laplacian with homogeneous neumann boundary conditions
+    #     defined on the tracer points"""
+
+    #     x0 = torch.rand(self.nx,self.ny,**self.arr_kwargs)
+
+    #     return pcg(self.apply_laplacian_c, 
+    #                self.apply_laplacian_c_preconditioner,
+    #                x0, b,tol=self.pcg_tol, max_iter=self.pcg_max_iter,
+    #                arr_kwargs = self.arr_kwargs)*self.masks.q.squeeze()
+
+    def laplacian_c_inverse_dct(self,b):
+        """Inverts the laplacian with homogeneous neumann boundary conditions
+        defined on the tracer points"""
+        # function adapted from github.com/louity/MQGeometry
+        # Copyright (c) 2023 louity
+        
+        # if self.cap_matrices is not None:
+        #     return solve_helmholtz_dct_cmm(
+        #             b[...,1:-1,1:-1]*self.masks.psi[...,1:-1,1:-1],
+        #             self.helmholtz_dct, self.cap_matrices,
+        #             self.masks.psi_irrbound_xids,
+        #             self.masks.psi_irrbound_yids,
+        #             self.masks.psi)
+        # else:
+        return solve_helmholtz_dct(b, self.helmholtz_dct)
+
+    def apply_laplacian_g(self,f):
+        fm_g = self.masks.psi.squeeze()*f # Mask the data to apply homogeneous dirichlet boundary conditions
+        return self.masks.psi.squeeze()*self.laplacian_g(fm_g,self.dx,self.dy)
+
+    # def apply_laplacian_g_preconditioner(self,r):
+    #     """If some dirichlet modes are found already, we use those modes to precondition the system"""
+    #     if self.n_dirichlet == 0:
+    #         return r*self.masks.psi.squeeze()
+    #     else:
+    #         x = torch.zeros_like(r)
+    #         for k in range(self.n_dirichlet):
+    #             rk = dot(self.dirichlet_modes[...,k],r)/self.dirichlet_evals[k]/norm(self.dirichlet_modes[...,k])
+    #             x += self.dirichlet_modes[...,k]*rk
+    #         return x*self.masks.psi.squeeze()
+
+    # def laplacian_g_inverse_pcg(self,b):
+    #     """Inverts the laplacian with homogeneous dirichlet boundary conditions
+    #     defined on the vorticity points"""
+
+    #     x0 = torch.rand(self.nx+1,self.ny+1,**self.arr_kwargs)
+
+    #     return pcg(self.apply_laplacian_g, 
+    #                self.apply_laplacian_g_preconditioner,
+    #                x0, b,tol=self.pcg_tol, max_iter=self.pcg_max_iter,
+    #                arr_kwargs = self.arr_kwargs)*self.masks.psi.squeeze()
 
     def laplacian_g_inverse_dst(self,b):
         """Inverts the laplacian with homogeneous dirichlet boundary conditions
@@ -194,50 +264,15 @@ class NMA:
         # function adapted from github.com/louity/MQGeometry
         # Copyright (c) 2023 louity
         
-        if self.cap_matrices is not None:
+        if self.cap_matrices_dst is not None:
             return solve_helmholtz_dst_cmm(
                     b[...,1:-1,1:-1]*self.masks.psi[...,1:-1,1:-1],
-                    self.helmholtz_dst, self.cap_matrices,
+                    self.helmholtz_dst, self.cap_matrices_dst,
                     self.masks.psi_irrbound_xids,
                     self.masks.psi_irrbound_yids,
                     self.masks.psi)
         else:
-            return solve_helmholtz_dst(b[...,1:-1,1:-1], self.helmholtz_dst)
-
-    def apply_laplacian_c(self,x):
-        return self.laplacian_c(x,self.dx,self.dy)*self.masks.q.squeeze()
-
-    def apply_laplacian_c_preconditioner(self,r):
-        return r*self.masks.q.squeeze()
-
-    def laplacian_c_inverse_pcg(self,b):
-        """Inverts the laplacian with homogeneous neumann boundary conditions
-        defined on the tracer points"""
-
-        x0 = torch.rand(self.nx,self.ny,**self.arr_kwargs)
-
-        return pcg(self.apply_laplacian_c, 
-                   self.apply_laplacian_c_preconditioner,
-                   x0, b,tol=self.pcg_tol, max_iter=self.pcg_max_iter,
-                   arr_kwargs = self.arr_kwargs)*self.masks.q.squeeze()
-
-    def apply_laplacian_g(self,f):
-        fm_g = self.masks.psi.squeeze()*f # Mask the data to apply homogeneous dirichlet boundary conditions
-        return self.masks.psi.squeeze()*self.laplacian_g(fm_g,self.dx,self.dy)
-
-    def apply_laplacian_g_preconditioner(self,r):
-        return r*self.masks.psi.squeeze()
-
-    def laplacian_g_inverse_pcg(self,b):
-        """Inverts the laplacian with homogeneous dirichlet boundary conditions
-        defined on the vorticity points"""
-
-        x0 = torch.rand(self.nx+1,self.ny+1,**self.arr_kwargs)
-
-        return pcg(self.apply_laplacian_g, 
-                   self.apply_laplacian_g_preconditioner,
-                   x0, b,tol=self.pcg_tol, max_iter=self.pcg_max_iter,
-                   arr_kwargs = self.arr_kwargs)*self.masks.psi.squeeze()
+            return solve_helmholtz_dst(b[...,1:-1,1:-1], self.helmholtz_dst)             
 
     def calculate_dirichlet_modes(self, tol=1e-12, max_iter=100):
         """Uses IRLM to calcualte the N smallest eigenmodes, corresponding to the 
@@ -247,7 +282,7 @@ class NMA:
         # create an initial guess/seed vector for IRLM
         v0 = self.xg*(self.xg-self.Lx)*self.yg*(self.yg-self.Ly)
         
-        evals, eigenvectors, r, last_iterate = implicitly_restarted_lanczos(self.laplacian_g_inverse_pcg, v0,
+        evals, eigenvectors, r, last_iterate = implicitly_restarted_lanczos(self.laplacian_g_inverse_dst, v0,
             self.nmodes, self.nkrylov, tol=tol, max_iter=max_iter,
             arr_kwargs = self.arr_kwargs)
 
@@ -255,21 +290,21 @@ class NMA:
 
         return eigenvalues, eigenvectors, r, last_iterate
 
-if __name__ == '__main__':
+    def calculate_neumann_modes(self, tol=1e-12, max_iter=100):
+        """Uses IRLM to calcualte the N smallest eigenmodes, corresponding to the 
+        largest length scales, of the Laplacian operator with homogeneous dirichlet
+        boundary conditions."""
 
-    import torch
-    import numpy as np
-    import matplotlib.pyplot as plt
+        # create an initial guess/seed vector for IRLM
+        v0 = self.xg*(self.xg-self.Lx)*self.yg*(self.yg-self.Ly)
+        
+        evals, eigenvectors, r, last_iterate = implicitly_restarted_lanczos(self.laplacian_c_inverse_dct, v0,
+            self.nmodes, self.nkrylov, tol=tol, max_iter=max_iter,
+            arr_kwargs = self.arr_kwargs)
 
-    param = {'nx': 100,
-             'ny': 100,
-             'Lx': 1.0,
-             'Ly': 1.0,
-             'nmodes': 80,
-             'device': 'cuda'}
-   
-    model = NMA(param)
-    
+        eigenvalues = 1.0/evals
+
+        return eigenvalues, eigenvectors, r, last_iterate
     
   
     # def findEigenmodes(self, nmodes=10, tolerance=0, deShift=0, neShift=1e-2):

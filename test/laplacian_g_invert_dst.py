@@ -5,11 +5,12 @@ import matplotlib.pyplot as plt
 from fluidspectraig.nma import NMA
 import time
 
-param = {'nx': 1000,
-            'ny': 1000,
+param = {'nx': 10,
+            'ny': 10,
             'Lx': 1.0,
             'Ly': 1.0,
-            'nmodes': 80,
+            'nmodes': 10,
+            'nkrylov':12,
             'device': 'cuda'}
 
 model = NMA(param)
@@ -28,7 +29,7 @@ plt.tight_layout()
 plt.savefig('b.png')
 
 tic = time.perf_counter()
-x = model.laplacian_g_inverse(b).squeeze()
+x = model.laplacian_g_inverse_dst(b).squeeze()
 toc = time.perf_counter()
 runtime = toc - tic
 print(f"Inverse runtime : {runtime} s")
@@ -45,5 +46,6 @@ im = a[1].imshow(err.T, cmap='bwr', origin='lower', vmin=um, vmax=uM, animated=T
 f.colorbar(im, ax=a[1],fraction=0.046,location='bottom')
 a[1].set_title('f-f_{exact}')
 
+print(f"max error: {err.max()}")
 plt.tight_layout()
 plt.savefig('ftest.png')
