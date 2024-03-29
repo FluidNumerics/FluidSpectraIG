@@ -45,13 +45,52 @@ def DirichletModes( model ):
 
     return eigenvalues, eigenmodes
 
+def NeumannModes( model ):
+    """ Calculates the exact neumann modes for a rectangular domain"""
 
-param = {'nx': 250,
-         'ny': 250,
+    nx = int((model.nx))
+    ny = int((model.ny))
+    Lx = model.Lx
+    Ly = model.Ly
+    nmodes = nx*ny
+    eigenmodes = np.zeros((nmodes,nx+1,ny+1))
+    eigenvalues = np.zeros(nmodes)
+    # Get the wave-numbers
+    kx = np.zeros(nx)
+    for m in range(0, nx):
+      kx[m] = (m)*np.pi/Lx
+        
+    ky = np.zeros(ny)
+    for m in range(0, ny):
+      ky[m] = (m)*np.pi/Ly
+
+    k = 0
+    tmp = np.zeros((nmodes,nx+1,ny+1))
+    ev = np.zeros(nmodes)
+    xg = model.xg.cpu().numpy()
+    yg = model.yg.cpu().numpy()
+    for m in range(0, ny):
+        for n in range(0, nx):
+            x = xg*kx[n]
+            y = yg*ky[m]
+            tmp[k,:,:] = np.cos( x )*np.cos( y )
+            ev[k] = kx[n]**2 + ky[m]**2
+            k+=1
+
+    sort_index = np.argsort(ev)
+    eigenvalues = ev[sort_index]
+    for k in range(0,nmodes):
+        eigenmodes[k,:,:] = tmp[sort_index[k],:,:].squeeze()
+
+    return eigenvalues, eigenmodes
+
+
+param = {'nx': 100,
+         'ny': 100,
          'Lx': 1.0,
          'Ly': 1.0,
-         'nmodes':  10,
-         'nkrylov': 12,
+         'nmodes':  50,
+         'nkrylov': 52,
          'device': 'cuda',
          'dtype': torch.float64}
 
@@ -66,21 +105,41 @@ print(f"Dirichlet mode runtime : {runtime} s")
 print(f"Dirichlet mode runtime per iterate : {runtime/n_iters} [s/iterate]", flush=True)
 
 
-#d_eigenvalues, d_eigenvectors = DirichletModes(model)
+tic = time.perf_counter()
+nn_eigenvalues, nn_eigenvectors, r, n_iters = model.calculate_neumann_modes(tol=1e-9, max_iter=100)
+toc = time.perf_counter()
 
-# me = min(d_eigenvalues[0:param['nmodes']])
-# Me = max(d_eigenvalues[0:param['nmodes']])
-# plt.figure()
-# plt.title(f"Eigenvalues {model.nx} x {model.ny}")
-# plt.plot(np.abs(d_eigenvalues[0:param['nmodes']]), np.abs(eigenvalues.cpu().numpy()),'o',label = 'dirichlet', markersize=3, linewidth=1 )
-# plt.plot([me,Me], [me,Me], 'g--',label = 'match', markersize=3, linewidth=1 )
+runtime = toc - tic
+print(f"Dirichlet mode runtime : {runtime} s")
+print(f"Dirichlet mode runtime per iterate : {runtime/n_iters} [s/iterate]", flush=True)
 
-# plt.xlabel("Exact")
-# plt.ylabel("Numerical")
+d_eigenvalues, d_eigenvectors = DirichletModes(model)
+n_eigenvalues, n_eigenvectors = NeumannModes(model)
 
-# plt.legend(loc='upper left')
-# plt.grid(color='gray', linestyle='--', linewidth=0.5)
-# plt.savefig(f"eigenvalues-{model.nx}_{param['nmodes']}.png")
+f,a = plt.subplots(1,2)
+me = min(d_eigenvalues[0:param['nmodes']])
+Me = max(d_eigenvalues[0:param['nmodes']])
+a[0].set_title(f"Dirichlet Eigenvalues {model.nx} x {model.ny}")
+a[0].plot(np.abs(d_eigenvalues[0:param['nmodes']]), np.abs(eigenvalues.cpu().numpy()),'o',label = 'dirichlet', markersize=3, linewidth=1 )
+a[0].plot([me,Me], [me,Me], 'g--',label = 'match', markersize=3, linewidth=1 )
+a[0].set_xlabel("Exact")
+a[0].set_ylabel("Numerical")
+a[0].legend(loc='upper left')
+a[0].grid(color='gray', linestyle='--', linewidth=0.5)
+
+me = min(n_eigenvalues[0:param['nmodes']])
+Me = max(n_eigenvalues[0:param['nmodes']])
+a[1].set_title(f"Neumann Eigenvalues {model.nx} x {model.ny}")
+a[1].plot(np.abs(n_eigenvalues[0:param['nmodes']]), np.abs(nn_eigenvalues.cpu().numpy()),'o',label = 'neumann', markersize=3, linewidth=1 )
+a[1].plot([me,Me], [me,Me], 'g--',label = 'match', markersize=3, linewidth=1 )
+a[1].set_xlabel("Exact")
+a[1].set_ylabel("Numerical")
+a[1].legend(loc='upper left')
+a[1].grid(color='gray', linestyle='--', linewidth=0.5)
+
+plt.tight_layout()
+
+plt.savefig(f"eigenvalues-{model.nx}_{param['nmodes']}.png")
 
 
 # f,a = plt.subplots(3,2)
@@ -115,6 +174,35 @@ print(f"Dirichlet mode runtime per iterate : {runtime/n_iters} [s/iterate]", flu
 
 
 f,a = plt.subplots(3,2)
+im = a[0,0].imshow(nn_eigenvectors.cpu().numpy()[...,0].squeeze())
+f.colorbar(im, ax=a[0,0],fraction=0.046,location='right')
+a[0,0].set_title('e_0')
+
+im = a[0,1].imshow(nn_eigenvectors.cpu().numpy()[...,1].squeeze())
+f.colorbar(im, ax=a[0,1],fraction=0.046,location='right')
+a[0,1].set_title('e_1')
+
+im = a[1,0].imshow(nn_eigenvectors.cpu().numpy()[...,2].squeeze())
+f.colorbar(im, ax=a[1,0],fraction=0.046,location='right')
+a[1,0].set_title('e_2')
+
+im = a[1,1].imshow(nn_eigenvectors.cpu().numpy()[...,3].squeeze())
+f.colorbar(im, ax=a[1,1],fraction=0.046,location='right')
+a[1,1].set_title('e_3')
+
+im = a[2,0].imshow(nn_eigenvectors.cpu().numpy()[...,4].squeeze())
+f.colorbar(im, ax=a[2,0],fraction=0.046,location='right')
+a[2,0].set_title('e_4')
+
+im = a[2,1].imshow(nn_eigenvectors.cpu().numpy()[...,5].squeeze())
+f.colorbar(im, ax=a[2,1],fraction=0.046,location='right')
+a[2,1].set_title('e_5')
+
+plt.tight_layout()
+plt.savefig('neumann_modes_numerical.png')
+plt.close()
+
+f,a = plt.subplots(3,2)
 im = a[0,0].imshow(eigenvectors.cpu().numpy()[...,0].squeeze())
 f.colorbar(im, ax=a[0,0],fraction=0.046,location='right')
 a[0,0].set_title('e_0')
@@ -140,7 +228,7 @@ f.colorbar(im, ax=a[2,1],fraction=0.046,location='right')
 a[2,1].set_title('e_5')
 
 plt.tight_layout()
-plt.savefig('eigenmodes_numerical.png')
+plt.savefig('dirichlet_modes_numerical.png')
 plt.close()
 
 # f,a = plt.subplots(1,1)

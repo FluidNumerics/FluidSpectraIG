@@ -95,13 +95,13 @@ def dfdy_v(f,dy):
     and returns a function on tracer points."""
     return (f[...,:,1:]-f[...,:,:-1])/dy
 
-def laplacian_c(f, dx, dy):
+def laplacian_c(f, masku, maskv, shift, dx, dy):
     """2-D laplacian on the tracer points. On tracer points, we are
     working with the divergent modes, which are associated with neumann
     boundary conditions. """
-    return dfdx_u( dfdx_c(f,dx), dx ) + dfdy_v( dfdy_c(f,dy), dy )
+    return dfdx_u( dfdx_c(f,dx)*masku, dx ) + dfdy_v( dfdy_c(f,dy)*maskv, dy ) - shift*f
 
-def laplacian_g(f, dx, dy):
+def laplacian_g(f, maskz, shift, dx, dy):
     """2-D laplacian on the vorticity points. On vorticity points, we are
     working with the rotational modes, which are associated with dirichlet 
     boundary conditions. Function values are assumed to be masked prior
@@ -112,7 +112,7 @@ def laplacian_g(f, dx, dy):
     return F.pad(
         (f[...,2:,1:-1] + f[...,:-2,1:-1] - 2*f[...,1:-1,1:-1]) / dx**2 \
       + (f[...,1:-1,2:] + f[...,1:-1,:-2] - 2*f[...,1:-1,1:-1]) / dy**2,
-        (1,1,1,1), mode='constant', value=0.)
+        (1,1,1,1), mode='constant', value=0.)*maskz - shift*f
 
 class NMA:
     def __init__(self, param):
@@ -124,12 +124,14 @@ class NMA:
         self.nkrylov = param['nkrylov']
         self.device = param['device']
         self.dtype = torch.float64
-        # self.pcg_tol = 1e-12
-        # self.pcg_max_iter = 1500
+        self.pcg_tol = 1e-10
+        self.pcg_max_iter = 1500
         self.arr_kwargs = {'dtype':self.dtype, 'device': self.device}
 
-        # self.n_neumann = 0
-        # self.n_dirichlet = 0
+        self.n_neumann = 0
+        self.n_dirichlet = 0
+        self.n_shift = 1e-6
+        self.d_shift = 0.0
 
         # grid
         self.xg, self.yg = torch.meshgrid(torch.linspace(0, self.Lx, self.nx+1, **self.arr_kwargs),
@@ -142,11 +144,6 @@ class NMA:
         self.xc, self.yc = torch.meshgrid(torch.linspace(self.dx*0.5, self.Lx-self.dx*0.5, self.nx, **self.arr_kwargs),
                                         torch.linspace(self.dy*0.5, self.Ly-self.dy*0.5, self.ny, **self.arr_kwargs),
                                         indexing='ij')
-
-        # self.neumann_modes = torch.zeros((self.nmodes,self.nx, self.ny), **self.arr_kwargs) # on tracer points; tracer points north and east of vorticity points by half grid cell
-        # self.neumann_evals = torch.zeros((self.nmodes), **self.arr_kwargs)
-        # self.dirichlet_modes = torch.zeros((self.nmodes,self.nx+1, self.ny+1), **self.arr_kwargs) # on vorticity points
-        # self.dirichlet_evals = torch.zeros((self.nmodes), **self.arr_kwargs)
 
         mask = param['mask'] if 'mask' in param.keys()  else torch.ones(self.nx, self.ny)
         self.masks = Masks(mask.type(self.dtype).to(self.device))
@@ -200,21 +197,22 @@ class NMA:
         self.helmholtz_dct = self.helmholtz_dct.type(self.dtype)
 
     def apply_laplacian_c(self,x):
-        return self.laplacian_c(x,self.dx,self.dy)*self.masks.q.squeeze()
+        return self.laplacian_c(x,self.masks.u, self.masks.v, self.n_shift,self.dx,self.dy)*self.masks.q.squeeze()
 
-    # def apply_laplacian_c_preconditioner(self,r):
-    #     return r*self.masks.q.squeeze()
+    def apply_laplacian_c_preconditioner(self,r):
+        return (r*self.masks.q).squeeze()
 
-    # def laplacian_c_inverse_pcg(self,b):
-    #     """Inverts the laplacian with homogeneous neumann boundary conditions
-    #     defined on the tracer points"""
+    def laplacian_c_inverse_pcg(self,b):
+        """Inverts the laplacian with homogeneous neumann boundary conditions
+        defined on the tracer points"""
 
-    #     x0 = torch.rand(self.nx,self.ny,**self.arr_kwargs)
+        x0 = torch.rand(self.xc.shape,**self.arr_kwargs)
+        x0 = x0 - x0.mean()
 
-    #     return pcg(self.apply_laplacian_c, 
-    #                self.apply_laplacian_c_preconditioner,
-    #                x0, b,tol=self.pcg_tol, max_iter=self.pcg_max_iter,
-    #                arr_kwargs = self.arr_kwargs)*self.masks.q.squeeze()
+        return pcg(self.apply_laplacian_c, 
+                   self.apply_laplacian_c_preconditioner,
+                   x0, b,tol=self.pcg_tol, max_iter=self.pcg_max_iter,
+                   arr_kwargs = self.arr_kwargs)*self.masks.q.squeeze()
 
     def laplacian_c_inverse_dct(self,b):
         """Inverts the laplacian with homogeneous neumann boundary conditions
@@ -234,29 +232,23 @@ class NMA:
 
     def apply_laplacian_g(self,f):
         fm_g = self.masks.psi.squeeze()*f # Mask the data to apply homogeneous dirichlet boundary conditions
-        return self.masks.psi.squeeze()*self.laplacian_g(fm_g,self.dx,self.dy)
+        return self.masks.psi.squeeze()*self.laplacian_g(fm_g,self.masks.psi,self.d_shift,self.dx,self.dy)
 
-    # def apply_laplacian_g_preconditioner(self,r):
-    #     """If some dirichlet modes are found already, we use those modes to precondition the system"""
-    #     if self.n_dirichlet == 0:
-    #         return r*self.masks.psi.squeeze()
-    #     else:
-    #         x = torch.zeros_like(r)
-    #         for k in range(self.n_dirichlet):
-    #             rk = dot(self.dirichlet_modes[...,k],r)/self.dirichlet_evals[k]/norm(self.dirichlet_modes[...,k])
-    #             x += self.dirichlet_modes[...,k]*rk
-    #         return x*self.masks.psi.squeeze()
+    def apply_laplacian_g_preconditioner(self,r):
+        """If some dirichlet modes are found already, we use those modes to precondition the system"""
+        return (r*self.masks.psi).squeeze()
+        
 
-    # def laplacian_g_inverse_pcg(self,b):
-    #     """Inverts the laplacian with homogeneous dirichlet boundary conditions
-    #     defined on the vorticity points"""
+    def laplacian_g_inverse_pcg(self,b):
+        """Inverts the laplacian with homogeneous dirichlet boundary conditions
+        defined on the vorticity points"""
 
-    #     x0 = torch.rand(self.nx+1,self.ny+1,**self.arr_kwargs)
+        x0 = torch.rand(self.nx+1,self.ny+1,**self.arr_kwargs)
 
-    #     return pcg(self.apply_laplacian_g, 
-    #                self.apply_laplacian_g_preconditioner,
-    #                x0, b,tol=self.pcg_tol, max_iter=self.pcg_max_iter,
-    #                arr_kwargs = self.arr_kwargs)*self.masks.psi.squeeze()
+        return pcg(self.apply_laplacian_g, 
+                   self.apply_laplacian_g_preconditioner,
+                   x0, b,tol=self.pcg_tol, max_iter=self.pcg_max_iter,
+                   arr_kwargs = self.arr_kwargs)*self.masks.psi.squeeze()
 
     def laplacian_g_inverse_dst(self,b):
         """Inverts the laplacian with homogeneous dirichlet boundary conditions
@@ -282,11 +274,11 @@ class NMA:
         # create an initial guess/seed vector for IRLM
         v0 = self.xg*(self.xg-self.Lx)*self.yg*(self.yg-self.Ly)
         
-        evals, eigenvectors, r, last_iterate = implicitly_restarted_lanczos(self.laplacian_g_inverse_dst, v0,
+        evals, eigenvectors, r, last_iterate = implicitly_restarted_lanczos(self.laplacian_g_inverse_pcg, v0,
             self.nmodes, self.nkrylov, tol=tol, max_iter=max_iter,
             arr_kwargs = self.arr_kwargs)
 
-        eigenvalues = 1.0/evals
+        eigenvalues = 1.0/evals + self.d_shift
 
         return eigenvalues, eigenvectors, r, last_iterate
 
@@ -296,13 +288,14 @@ class NMA:
         boundary conditions."""
 
         # create an initial guess/seed vector for IRLM
-        v0 = self.xg*(self.xg-self.Lx)*self.yg*(self.yg-self.Ly)
+        v0 = torch.rand(self.xc.shape, **self.arr_kwargs)
+        v0 = v0 - v0.mean()
         
-        evals, eigenvectors, r, last_iterate = implicitly_restarted_lanczos(self.laplacian_c_inverse_dct, v0,
+        evals, eigenvectors, r, last_iterate = implicitly_restarted_lanczos(self.laplacian_c_inverse_pcg, v0,
             self.nmodes, self.nkrylov, tol=tol, max_iter=max_iter,
             arr_kwargs = self.arr_kwargs)
 
-        eigenvalues = 1.0/evals
+        eigenvalues = 1.0/evals + self.n_shift
 
         return eigenvalues, eigenvectors, r, last_iterate
     

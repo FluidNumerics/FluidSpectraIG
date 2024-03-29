@@ -113,8 +113,7 @@ def compute_laplace_dct(nx, ny, dx, dy, arr_kwargs):
 
 def solve_helmholtz_dct(rhs, helmholtz_dct):
     uhat = dctII2D(rhs)/helmholtz_dct # constant mode causes division by 0
-    uhat[...,0,:] = 0.0 # enforce zero mean
-    uhat[...,:,0] = 0.0
+    uhat[...,0,0] = 0.0 # enforce zero mean
     return dctII2D(uhat)
 
 # def compute_dct_capacitance_matrices(helmholtz_dst, bound_xids, bound_yids):
