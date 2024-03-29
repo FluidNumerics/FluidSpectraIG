@@ -3,6 +3,7 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 from fluidspectraig.nma import NMA
+from fluidspectraig.mfeigen_torch import dot
 import time
 from torch.profiler import profile, record_function, ProfilerActivity
 
@@ -97,21 +98,44 @@ param = {'nx': 100,
 model = NMA(param)
 
 tic = time.perf_counter()
-eigenvalues, eigenvectors, r, n_iters = model.calculate_dirichlet_modes(tol=1e-9, max_iter=100)
+eigenvalues, eigenvectors, r, n_iters = model.calculate_dirichlet_modes(tol=1e-7, max_iter=100)
 toc = time.perf_counter()
 
 runtime = toc - tic
 print(f"Dirichlet mode runtime : {runtime} s")
 print(f"Dirichlet mode runtime per iterate : {runtime/n_iters} [s/iterate]", flush=True)
-
 
 tic = time.perf_counter()
-nn_eigenvalues, nn_eigenvectors, r, n_iters = model.calculate_neumann_modes(tol=1e-9, max_iter=100)
+nn_eigenvalues, nn_eigenvectors, r, n_iters = model.calculate_neumann_modes(tol=1e-7, max_iter=100)
 toc = time.perf_counter()
 
 runtime = toc - tic
-print(f"Dirichlet mode runtime : {runtime} s")
-print(f"Dirichlet mode runtime per iterate : {runtime/n_iters} [s/iterate]", flush=True)
+print(f"Neumann mode runtime : {runtime} s")
+print(f"Neumann mode runtime per iterate : {runtime/n_iters} [s/iterate]", flush=True)
+
+# verify orthogonality
+PtP = torch.zeros(param['nmodes'],param['nmodes'], **model.arr_kwargs)
+PtP_n = torch.zeros(param['nmodes'],param['nmodes'], **model.arr_kwargs)
+for row in range(param['nmodes']):
+  for col in range(param['nmodes']):
+    PtP[row,col] = dot( eigenvectors[...,row], eigenvectors[...,col] )
+    PtP_n[row,col] = dot( nn_eigenvectors[...,row], nn_eigenvectors[...,col] )
+
+
+f,a = plt.subplots(1,2)
+im = a[0].imshow(PtP.cpu().numpy())
+f.colorbar(im, ax=a[0],fraction=0.046,location='right')
+a[0].set_title('dirichlet mode P^T P')
+
+im = a[1].imshow(PtP_n.cpu().numpy())
+f.colorbar(im, ax=a[1],fraction=0.046,location='right')
+a[1].set_title('neumann mode P^T P')
+
+plt.tight_layout()
+plt.savefig('orthogonality-verification.png')
+plt.close()
+
+
 
 d_eigenvalues, d_eigenvectors = DirichletModes(model)
 n_eigenvalues, n_eigenvectors = NeumannModes(model)

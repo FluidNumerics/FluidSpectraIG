@@ -55,34 +55,27 @@ def pcg(matrixaction, preconditioner, x0, b, tol=1e-12, max_iter=100, arr_kwargs
     d = preconditioner(r)
 
     delta = dot(r,d)
-    rmag = norm(r)
-    bmag = norm(b)
-    r0 = max(rmag, bmag)
+    r0 = abs(delta)
 
-    for k in range(0, max_iter):
+    k = 0
+    while k < max_iter and abs(delta) > tol*r0:
         q = matrixaction(d)
         alpha = delta / dot(d,q)
         xk += alpha * d
 
-        if k % 50 == 0:
-            r = b - matrixaction(xk) # recalculate the residual every 50 iterations
-        else:
-            r -= alpha * q
-
-        rmag = norm(r)
-        if rmag <= tol*r0 :
-            break
+        # update the residual
+        r -= alpha * q
 
         s = preconditioner(r)
         deltaOld = delta
         delta = dot(r,s)
         beta = delta / deltaOld
         d = s + beta * d
+        k+=1
 
-
-    if rmag > tol*r0:
+    if delta > tol*r0:
         print(
-            f"Conjugate gradient method did not converge in {k+1} iterations : {rmag}"
+            f"Conjugate gradient method did not converge in {k+1} iterations : {delta}"
         )
 
     return xk

@@ -59,60 +59,17 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from fluidspectraig.fd import grad_perp, interp_TP, laplacian_h
+#from fluidspectraig.fd import grad_perp, interp_TP, laplacian_h
 from fluidspectraig.helmholtz import compute_laplace_dst, solve_helmholtz_dst, \
                       solve_helmholtz_dst_cmm, compute_dst_capacitance_matrices, \
                       compute_laplace_dct, solve_helmholtz_dct
 from fluidspectraig.masks import Masks
 from fluidspectraig.mfeigen_torch import implicitly_restarted_lanczos,norm, dot
 from fluidspectraig.mfpcg_torch import pcg
-
+from fluidspectraig.elliptic import laplacian_c, laplacian_g, \
+                      identity_preconditioner, jacobi_g_inverse
 zeroTol = 1e-12
 
-def dfdx_c(f,dx):
-    """Calculates the x-derivative of a function on tracer points
-    and returns a function on u-points.Homogeneous neumann boundary
-    conditions are assumed on the grid boundaries."""
-    return F.pad( 
-        (f[...,1:,:]-f[...,:-1,:])/dx, (0,0,1,1), mode='constant',value=0.
-    )
-
-def dfdx_u(f,dx):
-    """Calculates the x-derivative of a function on u points
-    and returns a function on tracer-points."""
-    return (f[...,1:,:]-f[...,:-1,:])/dx
-
-def dfdy_c(f,dy):
-    """Calculates the y-derivative of a function on tracer points
-    and returns a function on v-points. Homogeneous neumann boundary
-    conditions are assumed on the grid boundaries."""
-    return F.pad( 
-        (f[...,:,1:]-f[...,:,:-1])/dy, (1,1,0,0), mode='constant',value=0.
-    )
-
-def dfdy_v(f,dy):
-    """Calculates the y-derivative of a function on v points
-    and returns a function on tracer points."""
-    return (f[...,:,1:]-f[...,:,:-1])/dy
-
-def laplacian_c(f, masku, maskv, shift, dx, dy):
-    """2-D laplacian on the tracer points. On tracer points, we are
-    working with the divergent modes, which are associated with neumann
-    boundary conditions. """
-    return dfdx_u( dfdx_c(f,dx)*masku, dx ) + dfdy_v( dfdy_c(f,dy)*maskv, dy ) - shift*f
-
-def laplacian_g(f, maskz, shift, dx, dy):
-    """2-D laplacian on the vorticity points. On vorticity points, we are
-    working with the rotational modes, which are associated with dirichlet 
-    boundary conditions. Function values are assumed to be masked prior
-    to calling this method. Additionally, the laplacian is returned
-    as zero numerical boundaries"""
-    # function adapted from github.com/louity/MQGeometry
-    # Copyright (c) 2023 louity
-    return F.pad(
-        (f[...,2:,1:-1] + f[...,:-2,1:-1] - 2*f[...,1:-1,1:-1]) / dx**2 \
-      + (f[...,1:-1,2:] + f[...,1:-1,:-2] - 2*f[...,1:-1,1:-1]) / dy**2,
-        (1,1,1,1), mode='constant', value=0.)*maskz - shift*f
 
 class NMA:
     def __init__(self, param):
@@ -124,7 +81,7 @@ class NMA:
         self.nkrylov = param['nkrylov']
         self.device = param['device']
         self.dtype = torch.float64
-        self.pcg_tol = 1e-10
+        self.pcg_tol = 1e-24
         self.pcg_max_iter = 1500
         self.arr_kwargs = {'dtype':self.dtype, 'device': self.device}
 
@@ -155,9 +112,13 @@ class NMA:
         comp =  torch.__version__[0] == '2'
         self.laplacian_g = torch.compile(laplacian_g) if comp else laplacian_g
         self.laplacian_c = torch.compile(laplacian_c) if comp else laplacian_c
-        self.grad_perp = torch.compile(grad_perp) if comp else grad_perp
-        self.interp_TP = torch.compile(interp_TP) if comp else interp_TP
-        self.laplacian_h = torch.compile(laplacian_h) if comp else laplacian_h
+        # preconditioners
+        self.identity_preconditioner = torch.compile(identity_preconditioner) if comp else identity_preconditioner
+        self.jacobi_g_inverse = torch.compile(jacobi_g_inverse) if comp else jacobi_g_inverse
+
+        #self.grad_perp = torch.compile(grad_perp) if comp else grad_perp
+        #self.interp_TP = torch.compile(interp_TP) if comp else interp_TP
+        #self.laplacian_h = torch.compile(laplacian_h) if comp else laplacian_h
         if not comp:
             print('Need torch >= 2.0 to use torch.compile, current version '
                  f'{torch.__version__}, the solver will be slower! ')
@@ -200,7 +161,7 @@ class NMA:
         return self.laplacian_c(x,self.masks.u, self.masks.v, self.n_shift,self.dx,self.dy)*self.masks.q.squeeze()
 
     def apply_laplacian_c_preconditioner(self,r):
-        return (r*self.masks.q).squeeze()
+        return self.identity_preconditioner(r,self.masks.q)
 
     def laplacian_c_inverse_pcg(self,b):
         """Inverts the laplacian with homogeneous neumann boundary conditions
@@ -236,15 +197,22 @@ class NMA:
 
     def apply_laplacian_g_preconditioner(self,r):
         """If some dirichlet modes are found already, we use those modes to precondition the system"""
-        return (r*self.masks.psi).squeeze()
+        return self.identity_preconditioner(r,self.masks.psi)
         
-
     def laplacian_g_inverse_pcg(self,b):
         """Inverts the laplacian with homogeneous dirichlet boundary conditions
         defined on the vorticity points"""
 
-        x0 = torch.rand(self.nx+1,self.ny+1,**self.arr_kwargs)
-
+        # If we've saved some of the dirichlet modes, we can use them
+        # to improve the initial guess for the inverse. 
+        if self.n_dirichlet > 0:
+            x0 = torch.zeros_like(self.xg)
+            for k in range(self.n_dirichlet):
+                rhat = dot( self.dirichlet_modes[...,k], b )/self.dirichlet_evals[k]
+                x0 += rhat*self.dirichlet_modes[...,k]
+        else:
+            x0 = torch.rand(self.nx+1,self.ny+1,**self.arr_kwargs)
+        
         return pcg(self.apply_laplacian_g, 
                    self.apply_laplacian_g_preconditioner,
                    x0, b,tol=self.pcg_tol, max_iter=self.pcg_max_iter,
