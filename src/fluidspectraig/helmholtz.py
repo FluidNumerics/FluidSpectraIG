@@ -95,8 +95,7 @@ def solve_helmholtz_dst_cmm(rhs, helmholtz_dst,
 # tracer points (on u and v points)
 def dctII1D(x, norm='ortho'):
     """1D type-II discrete cosine transform."""
-    return torch.fft.irfft(x, dim=-1, norm=norm)[...,0:x.shape[-1]]
-
+    return torch.fft.irfft(x, dim=-1, norm=norm)[...,0:x.shape[-1]] 
 
 def dctII2D(x, norm='ortho'):
     """2D type-II discrete cosine transform."""
@@ -112,9 +111,10 @@ def compute_laplace_dct(nx, ny, dx, dy, arr_kwargs):
     return 2*(torch.cos(torch.pi/nx*x) - 1)/dx**2 + 2*(torch.cos(torch.pi/ny*y) - 1)/dy**2
 
 def solve_helmholtz_dct(rhs, helmholtz_dct):
-    uhat = dctII2D(rhs)/helmholtz_dct # constant mode causes division by 0
+    #b = F.pad(rhs, (1,1,1,1), mode='replicate')
+    uhat = dctII2D(rhs)/helmholtz_dct 
     uhat[...,0,0] = 0.0 # enforce zero mean
-    return dctII2D(uhat)
+    return dctII2D(uhat)#[...,1:-1,1:-1]
 
 # def compute_dct_capacitance_matrices(helmholtz_dst, bound_xids, bound_yids):
 #     nl  = helmholtz_dst.shape[-3]

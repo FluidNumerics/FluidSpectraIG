@@ -8,19 +8,17 @@ import time
 from torch.profiler import profile, record_function, ProfilerActivity
 
 
-param = {'nx': 100,
-         'ny': 100,
+param = {'nx': 250,
+         'ny': 250,
          'Lx': 1.0,
          'Ly': 1.0,
-         'nmodes':  20,
-         'nkrylov': 25,
          'device': 'cuda',
          'dtype': torch.float64}
-
+nmodes = 500
 model = NMA(param)
 
 tic = time.perf_counter()
-eigenvalues, eigenvectors, r, n_iters = model.calculate_dirichlet_modes(tol=1e-7, max_iter=100)
+eigenvalues, eigenvectors, r, n_iters = model.calculate_dirichlet_modes(nmodes=500, tol=1e-7, max_iter=100)
 toc = time.perf_counter()
 
 runtime = toc - tic
@@ -38,7 +36,6 @@ fexact = torch.sin(torch.pi*model.xg)*torch.sin(torch.pi*model.yg)
 lapf = model.apply_laplacian_g(fexact)
 
 tic = time.perf_counter()
-#x = model.apply_laplacian_g_preconditioner(lapf).squeeze()
 x = model.laplacian_g_inverse_pcg(lapf).squeeze()
 toc = time.perf_counter()
 runtime = toc - tic
@@ -59,7 +56,6 @@ a[1].set_title('f-f_{exact}')
 print(f"max error: {err.max()}")
 plt.tight_layout()
 plt.savefig('ftest_g.png')
-
 
 
 

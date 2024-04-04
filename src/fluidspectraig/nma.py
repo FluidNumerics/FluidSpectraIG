@@ -67,7 +67,7 @@ from fluidspectraig.masks import Masks
 from fluidspectraig.mfeigen_torch import implicitly_restarted_lanczos,norm, dot
 from fluidspectraig.mfpcg_torch import pcg
 from fluidspectraig.elliptic import laplacian_c, laplacian_g, \
-                      identity_preconditioner, jacobi_g_inverse
+                      identity_preconditioner, jacobi_preconditioner
 zeroTol = 1e-12
 
 
@@ -77,8 +77,8 @@ class NMA:
         self.Lx = param['Lx']
         self.ny = param['ny']
         self.Ly = param['Ly']
-        self.nmodes = param['nmodes']
-        self.nkrylov = param['nkrylov']
+        # self.nmodes = param['nmodes']
+        # self.nkrylov = param['nkrylov']
         self.device = param['device']
         self.dtype = torch.float64
         self.pcg_tol = 1e-24
@@ -87,7 +87,7 @@ class NMA:
 
         self.n_neumann = 0
         self.n_dirichlet = 0
-        self.n_shift = 1e-6
+        self.n_shift = -1e-2 # default to make system positive definite
         self.d_shift = 0.0
 
         # grid
@@ -114,11 +114,29 @@ class NMA:
         self.laplacian_c = torch.compile(laplacian_c) if comp else laplacian_c
         # preconditioners
         self.identity_preconditioner = torch.compile(identity_preconditioner) if comp else identity_preconditioner
-        self.jacobi_g_inverse = torch.compile(jacobi_g_inverse) if comp else jacobi_g_inverse
+        self.jacobi_preconditioner = torch.compile(jacobi_preconditioner) if comp else jacobi_preconditioner
 
-        #self.grad_perp = torch.compile(grad_perp) if comp else grad_perp
-        #self.interp_TP = torch.compile(interp_TP) if comp else interp_TP
-        #self.laplacian_h = torch.compile(laplacian_h) if comp else laplacian_h
+        if "inverter" in param.keys():
+            if param['inverter'] == 'dft':
+                self.dirichlet_matrix_inverse = self.laplacian_g_inverse_dst
+                self.neumann_matrix_inverse = self.laplacian_c_inverse_dct
+            elif param['inverter'] == 'pcg':
+                print(f"Using PCG matrix inversion method not found",flush=True)
+                self.dirichlet_matrix_inverse = self.laplacian_g_inverse_pcg
+                self.neumann_matrix_inverse = self.laplacian_c_inverse_pcg
+                self.laplacian_c_preconditioner = self.jacobi_preconditioner
+                self.laplacian_g_preconditioner = self.jacobi_preconditioner
+
+            else:
+                print(f"Matrix inversion method not found : {param['inverter']}",flush=True)
+                print(f"Defaulting to dft inverter",flush=True)
+                self.dirichlet_matrix_inverse = self.laplacian_g_inverse_dst
+                self.neumann_matrix_inverse = self.laplacian_c_inverse_dct
+        else:
+            # If inverter is not specified, use dst/dct
+            self.dirichlet_matrix_inverse = self.laplacian_g_inverse_dst
+            self.neumann_matrix_inverse = self.laplacian_c_inverse_dct
+
         if not comp:
             print('Need torch >= 2.0 to use torch.compile, current version '
                  f'{torch.__version__}, the solver will be slower! ')
@@ -141,16 +159,8 @@ class NMA:
             self.cap_matrices_dst = compute_dst_capacitance_matrices(
                 self.helmholtz_dst, self.masks.psi_irrbound_xids,
                 self.masks.psi_irrbound_yids)
-
-            sol = solve_helmholtz_dst_cmm(
-                    (cst*self.masks.psi)[...,1:-1,1:-1],
-                    self.helmholtz_dst, self.cap_matrices_dst,
-                    self.masks.psi_irrbound_xids,
-                    self.masks.psi_irrbound_yids,
-                    self.masks.psi)
         else:
             self.cap_matrices_dst = None
-            sol = solve_helmholtz_dst(cst[...,1:-1,1:-1], self.helmholtz_dst)
 
         self.cap_matrices_dct = None
 
@@ -161,7 +171,7 @@ class NMA:
         return self.laplacian_c(x,self.masks.u, self.masks.v, self.n_shift,self.dx,self.dy)*self.masks.q.squeeze()
 
     def apply_laplacian_c_preconditioner(self,r):
-        return self.identity_preconditioner(r,self.masks.q)
+        return self.laplacian_c_preconditioner(r,self.masks.q,self.n_shift,self.dx,self.dy)*self.masks.q.squeeze()
 
     def laplacian_c_inverse_pcg(self,b):
         """Inverts the laplacian with homogeneous neumann boundary conditions
@@ -181,15 +191,7 @@ class NMA:
         # function adapted from github.com/louity/MQGeometry
         # Copyright (c) 2023 louity
         
-        # if self.cap_matrices is not None:
-        #     return solve_helmholtz_dct_cmm(
-        #             b[...,1:-1,1:-1]*self.masks.psi[...,1:-1,1:-1],
-        #             self.helmholtz_dct, self.cap_matrices,
-        #             self.masks.psi_irrbound_xids,
-        #             self.masks.psi_irrbound_yids,
-        #             self.masks.psi)
-        # else:
-        return solve_helmholtz_dct(b, self.helmholtz_dct)
+        return -solve_helmholtz_dct(b, self.helmholtz_dct)
 
     def apply_laplacian_g(self,f):
         fm_g = self.masks.psi.squeeze()*f # Mask the data to apply homogeneous dirichlet boundary conditions
@@ -197,22 +199,14 @@ class NMA:
 
     def apply_laplacian_g_preconditioner(self,r):
         """If some dirichlet modes are found already, we use those modes to precondition the system"""
-        return self.identity_preconditioner(r,self.masks.psi)
+        return self.laplacian_g_preconditioner(r,self.masks.psi,self.d_shift,self.dx,self.dy)
+
         
     def laplacian_g_inverse_pcg(self,b):
         """Inverts the laplacian with homogeneous dirichlet boundary conditions
         defined on the vorticity points"""
 
-        # If we've saved some of the dirichlet modes, we can use them
-        # to improve the initial guess for the inverse. 
-        if self.n_dirichlet > 0:
-            x0 = torch.zeros_like(self.xg)
-            for k in range(self.n_dirichlet):
-                rhat = dot( self.dirichlet_modes[...,k], b )/self.dirichlet_evals[k]
-                x0 += rhat*self.dirichlet_modes[...,k]
-        else:
-            x0 = torch.rand(self.nx+1,self.ny+1,**self.arr_kwargs)
-        
+        x0 = torch.rand(self.nx+1,self.ny+1,**self.arr_kwargs)
         return pcg(self.apply_laplacian_g, 
                    self.apply_laplacian_g_preconditioner,
                    x0, b,tol=self.pcg_tol, max_iter=self.pcg_max_iter,
@@ -225,45 +219,70 @@ class NMA:
         # Copyright (c) 2023 louity
         
         if self.cap_matrices_dst is not None:
-            return solve_helmholtz_dst_cmm(
+            return -solve_helmholtz_dst_cmm(
                     b[...,1:-1,1:-1]*self.masks.psi[...,1:-1,1:-1],
                     self.helmholtz_dst, self.cap_matrices_dst,
                     self.masks.psi_irrbound_xids,
                     self.masks.psi_irrbound_yids,
                     self.masks.psi)
         else:
-            return solve_helmholtz_dst(b[...,1:-1,1:-1], self.helmholtz_dst)             
+            return -solve_helmholtz_dst(b[...,1:-1,1:-1], self.helmholtz_dst)             
 
-    def calculate_dirichlet_modes(self, tol=1e-12, max_iter=100):
+    def calculate_dirichlet_modes(self, nmodes, nkrylov=-1, mode="shift_invert", tol=1e-12, max_iter=100):
         """Uses IRLM to calcualte the N smallest eigenmodes, corresponding to the 
         largest length scales, of the Laplacian operator with homogeneous dirichlet
         boundary conditions."""
 
-        # create an initial guess/seed vector for IRLM
-        v0 = self.xg*(self.xg-self.Lx)*self.yg*(self.yg-self.Ly)
-        
-        evals, eigenvectors, r, last_iterate = implicitly_restarted_lanczos(self.laplacian_g_inverse_pcg, v0,
-            self.nmodes, self.nkrylov, tol=tol, max_iter=max_iter,
-            arr_kwargs = self.arr_kwargs)
+        if nkrylov == -1:
+            nkrylov = nmodes + 10
+            
+        if mode == "shift_invert":
+            # create an initial guess/seed vector for IRLM
+            #v0 = self.xg*(self.xg-self.Lx)*self.yg*(self.yg-self.Ly)
+            v0 = torch.rand(self.xg.shape, **self.arr_kwargs)
 
-        eigenvalues = 1.0/evals + self.d_shift
+            evals, eigenvectors, r, last_iterate = implicitly_restarted_lanczos(self.dirichlet_matrix_inverse, v0,
+                nmodes, nkrylov, tol=tol, max_iter=max_iter,
+                arr_kwargs = self.arr_kwargs)
+
+            eigenvalues = 1.0/evals + self.d_shift
+
+        elif mode == "largest":
+
+            eigenvalues, eigenvectors, r, last_iterate = implicitly_restarted_lanczos(self.apply_laplacian_g, v0,
+                nmodes, nkrylov, tol=tol, max_iter=max_iter,
+                arr_kwargs = self.arr_kwargs)
 
         return eigenvalues, eigenvectors, r, last_iterate
 
-    def calculate_neumann_modes(self, tol=1e-12, max_iter=100):
+    def calculate_neumann_modes(self, nmodes, nkrylov=-1, mode="shift_invert", tol=1e-12, max_iter=100):
         """Uses IRLM to calcualte the N smallest eigenmodes, corresponding to the 
         largest length scales, of the Laplacian operator with homogeneous dirichlet
         boundary conditions."""
 
-        # create an initial guess/seed vector for IRLM
-        v0 = torch.rand(self.xc.shape, **self.arr_kwargs)
-        v0 = v0 - v0.mean()
+        if nkrylov == -1:
+            nkrylov = nmodes + 10
         
-        evals, eigenvectors, r, last_iterate = implicitly_restarted_lanczos(self.laplacian_c_inverse_pcg, v0,
-            self.nmodes, self.nkrylov, tol=tol, max_iter=max_iter,
-            arr_kwargs = self.arr_kwargs)
+        if mode == "shift_invert":
+            # create an initial guess/seed vector for IRLM
+            v0 = torch.rand(self.xc.shape, **self.arr_kwargs)
+            v0 = v0 - v0.mean()
+        
+            evals, eigenvectors, r, last_iterate = implicitly_restarted_lanczos(self.laplacian_c_inverse_dct, v0,
+                nmodes, nkrylov, tol=tol, max_iter=max_iter,
+                arr_kwargs = self.arr_kwargs)
 
-        eigenvalues = 1.0/evals + self.n_shift
+            eigenvalues = 1.0/evals + self.n_shift
+
+        elif mode == "largest":
+            # create an initial guess/seed vector for IRLM
+            v0 = torch.rand(self.xc.shape, **self.arr_kwargs)
+            v0 = v0 - v0.mean()
+        
+            eigenvalues, eigenvectors, r, last_iterate = implicitly_restarted_lanczos(self.apply_laplacian_c, v0,
+                nmodes, nkrylov, tol=tol, max_iter=max_iter,
+                arr_kwargs = self.arr_kwargs)
+
 
         return eigenvalues, eigenvectors, r, last_iterate
     

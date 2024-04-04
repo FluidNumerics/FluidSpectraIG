@@ -33,7 +33,8 @@ def laplacian_c(f, masku, maskv, shift, dx, dy):
     """2-D laplacian on the tracer points. On tracer points, we are
     working with the divergent modes, which are associated with neumann
     boundary conditions. """
-    return dfdx_u( dfdx_c(f,dx)*masku, dx ) + dfdy_v( dfdy_c(f,dy)*maskv, dy ) - shift*f
+    return -dfdx_u( dfdx_c(f,dx)*masku, dx ) - dfdy_v( dfdy_c(f,dy)*maskv, dy ) - shift*f
+
 
 def laplacian_g(f, maskz, shift, dx, dy):
     """2-D laplacian on the vorticity points. On vorticity points, we are
@@ -43,17 +44,17 @@ def laplacian_g(f, maskz, shift, dx, dy):
     as zero numerical boundaries"""
     # function adapted from github.com/louity/MQGeometry
     # Copyright (c) 2023 louity
-    return F.pad(
+    return -F.pad(
         (f[...,2:,1:-1] + f[...,:-2,1:-1] - 2*f[...,1:-1,1:-1]) / dx**2 \
       + (f[...,1:-1,2:] + f[...,1:-1,:-2] - 2*f[...,1:-1,1:-1]) / dy**2,
         (1,1,1,1), mode='constant', value=0.)*maskz - shift*f
 
 
-def identity_preconditioner(r,mask):
+def identity_preconditioner(r,mask,shift,dx,dy):
     """Identity preconditioner (equivalent to no preconditioning). For
     testing purposes only."""
     return (r*mask).squeeze()
 
-def jacobi_g_inverse(r,mask,shift,dx,dy):
-    """Jacobi preconditioner for the psi/vorticity points"""
-    return ((-r*dx*dy/( 2.0*dy/dx + 2.0*dx/dy + shift*dx*dy ))*mask).squeeze()
+def jacobi_preconditioner(r,mask,shift,dx,dy):
+    """Jacobi preconditioner"""
+    return ((r/( 2.0/(dx*dx) + 2.0/(dy*dy) - shift ))*mask).squeeze()

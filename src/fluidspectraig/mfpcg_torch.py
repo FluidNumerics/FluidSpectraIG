@@ -75,7 +75,8 @@ def pcg(matrixaction, preconditioner, x0, b, tol=1e-12, max_iter=100, arr_kwargs
 
     if delta > tol*r0:
         print(
-            f"Conjugate gradient method did not converge in {k+1} iterations : {delta}"
+            f"Conjugate gradient method did not converge in {k+1} iterations : {delta}",
+            flush=True
         )
 
     return xk

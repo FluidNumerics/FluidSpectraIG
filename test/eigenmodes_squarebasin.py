@@ -15,7 +15,7 @@ def DirichletModes( model ):
     Lx = model.Lx
     Ly = model.Ly
     nmodes = nx*ny
-    eigenmodes = np.zeros((nmodes,nx+1,ny+1))
+    #eigenmodes = np.zeros((nmodes,nx+1,ny+1))
     eigenvalues = np.zeros(nmodes)
     # Get the wave-numbers
     kx = np.zeros(nx)
@@ -27,7 +27,7 @@ def DirichletModes( model ):
       ky[m] = (m+1)*np.pi/Ly
 
     k = 0
-    tmp = np.zeros((nmodes,nx+1,ny+1))
+    #tmp = np.zeros((nmodes,nx+1,ny+1))
     ev = np.zeros(nmodes)
     xg = model.xg.cpu().numpy()
     yg = model.yg.cpu().numpy()
@@ -35,16 +35,16 @@ def DirichletModes( model ):
         for n in range(0, nx):
             x = xg*kx[n]
             y = yg*ky[m]
-            tmp[k,:,:] = np.sin( x )*np.sin( y )
+            #tmp[k,:,:] = np.sin( x )*np.sin( y )
             ev[k] = kx[n]**2 + ky[m]**2
             k+=1
 
     sort_index = np.argsort(ev)
     eigenvalues = ev[sort_index]
-    for k in range(0,nmodes):
-        eigenmodes[k,:,:] = tmp[sort_index[k],:,:].squeeze()
+    #for k in range(0,nmodes):
+    #    eigenmodes[k,:,:] = tmp[sort_index[k],:,:].squeeze()
 
-    return eigenvalues, eigenmodes
+    return eigenvalues#, eigenmodes
 
 def NeumannModes( model ):
     """ Calculates the exact neumann modes for a rectangular domain"""
@@ -54,7 +54,7 @@ def NeumannModes( model ):
     Lx = model.Lx
     Ly = model.Ly
     nmodes = nx*ny
-    eigenmodes = np.zeros((nmodes,nx+1,ny+1))
+    #eigenmodes = np.zeros((nmodes,nx+1,ny+1))
     eigenvalues = np.zeros(nmodes)
     # Get the wave-numbers
     kx = np.zeros(nx)
@@ -66,7 +66,7 @@ def NeumannModes( model ):
       ky[m] = (m)*np.pi/Ly
 
     k = 0
-    tmp = np.zeros((nmodes,nx+1,ny+1))
+    #tmp = np.zeros((nmodes,nx+1,ny+1))
     ev = np.zeros(nmodes)
     xg = model.xg.cpu().numpy()
     yg = model.yg.cpu().numpy()
@@ -74,31 +74,30 @@ def NeumannModes( model ):
         for n in range(0, nx):
             x = xg*kx[n]
             y = yg*ky[m]
-            tmp[k,:,:] = np.cos( x )*np.cos( y )
+          #  tmp[k,:,:] = np.cos( x )*np.cos( y )
             ev[k] = kx[n]**2 + ky[m]**2
             k+=1
 
     sort_index = np.argsort(ev)
     eigenvalues = ev[sort_index]
-    for k in range(0,nmodes):
-        eigenmodes[k,:,:] = tmp[sort_index[k],:,:].squeeze()
+    #for k in range(0,nmodes):
+    #    eigenmodes[k,:,:] = tmp[sort_index[k],:,:].squeeze()
 
-    return eigenvalues, eigenmodes
+    return eigenvalues #, eigenmodes
 
 
-param = {'nx': 100,
-         'ny': 100,
+param = {'nx': 250,
+         'ny': 250,
          'Lx': 1.0,
          'Ly': 1.0,
-         'nmodes':  50,
-         'nkrylov': 52,
          'device': 'cuda',
          'dtype': torch.float64}
 
 model = NMA(param)
+nmodes = 500
 
 tic = time.perf_counter()
-eigenvalues, eigenvectors, r, n_iters = model.calculate_dirichlet_modes(tol=1e-7, max_iter=100)
+eigenvalues, eigenvectors, r, n_iters = model.calculate_dirichlet_modes(nmodes=500,tol=1e-7, max_iter=100)
 toc = time.perf_counter()
 
 runtime = toc - tic
@@ -106,7 +105,7 @@ print(f"Dirichlet mode runtime : {runtime} s")
 print(f"Dirichlet mode runtime per iterate : {runtime/n_iters} [s/iterate]", flush=True)
 
 tic = time.perf_counter()
-nn_eigenvalues, nn_eigenvectors, r, n_iters = model.calculate_neumann_modes(tol=1e-7, max_iter=100)
+nn_eigenvalues, nn_eigenvectors, r, n_iters = model.calculate_neumann_modes(nmodes=500,tol=1e-7, max_iter=100)
 toc = time.perf_counter()
 
 runtime = toc - tic
@@ -114,10 +113,10 @@ print(f"Neumann mode runtime : {runtime} s")
 print(f"Neumann mode runtime per iterate : {runtime/n_iters} [s/iterate]", flush=True)
 
 # verify orthogonality
-PtP = torch.zeros(param['nmodes'],param['nmodes'], **model.arr_kwargs)
-PtP_n = torch.zeros(param['nmodes'],param['nmodes'], **model.arr_kwargs)
-for row in range(param['nmodes']):
-  for col in range(param['nmodes']):
+PtP = torch.zeros(nmodes,nmodes, **model.arr_kwargs)
+PtP_n = torch.zeros(nmodes,nmodes, **model.arr_kwargs)
+for row in range(nmodes):
+  for col in range(nmodes):
     PtP[row,col] = dot( eigenvectors[...,row], eigenvectors[...,col] )
     PtP_n[row,col] = dot( nn_eigenvectors[...,row], nn_eigenvectors[...,col] )
 
@@ -135,26 +134,24 @@ plt.tight_layout()
 plt.savefig('orthogonality-verification.png')
 plt.close()
 
-
-
-d_eigenvalues, d_eigenvectors = DirichletModes(model)
-n_eigenvalues, n_eigenvectors = NeumannModes(model)
+d_eigenvalues = DirichletModes(model)
+n_eigenvalues = NeumannModes(model)
 
 f,a = plt.subplots(1,2)
-me = min(d_eigenvalues[0:param['nmodes']])
-Me = max(d_eigenvalues[0:param['nmodes']])
+me = min(d_eigenvalues[0:nmodes])
+Me = max(d_eigenvalues[0:nmodes])
 a[0].set_title(f"Dirichlet Eigenvalues {model.nx} x {model.ny}")
-a[0].plot(np.abs(d_eigenvalues[0:param['nmodes']]), np.abs(eigenvalues.cpu().numpy()),'o',label = 'dirichlet', markersize=3, linewidth=1 )
+a[0].plot(np.abs(d_eigenvalues[0:nmodes]), np.abs(eigenvalues.cpu().numpy()),'o',label = 'dirichlet', markersize=3, linewidth=1 )
 a[0].plot([me,Me], [me,Me], 'g--',label = 'match', markersize=3, linewidth=1 )
 a[0].set_xlabel("Exact")
 a[0].set_ylabel("Numerical")
 a[0].legend(loc='upper left')
 a[0].grid(color='gray', linestyle='--', linewidth=0.5)
 
-me = min(n_eigenvalues[0:param['nmodes']])
-Me = max(n_eigenvalues[0:param['nmodes']])
+me = min(n_eigenvalues[0:nmodes])
+Me = max(n_eigenvalues[0:nmodes])
 a[1].set_title(f"Neumann Eigenvalues {model.nx} x {model.ny}")
-a[1].plot(np.abs(n_eigenvalues[0:param['nmodes']]), np.abs(nn_eigenvalues.cpu().numpy()),'o',label = 'neumann', markersize=3, linewidth=1 )
+a[1].plot(np.abs(n_eigenvalues[0:nmodes]), np.abs(nn_eigenvalues.cpu().numpy()),'o',label = 'neumann', markersize=3, linewidth=1 )
 a[1].plot([me,Me], [me,Me], 'g--',label = 'match', markersize=3, linewidth=1 )
 a[1].set_xlabel("Exact")
 a[1].set_ylabel("Numerical")
@@ -163,7 +160,7 @@ a[1].grid(color='gray', linestyle='--', linewidth=0.5)
 
 plt.tight_layout()
 
-plt.savefig(f"eigenvalues-{model.nx}_{param['nmodes']}.png")
+plt.savefig(f"eigenvalues-{model.nx}_{nmodes}.png")
 
 
 # f,a = plt.subplots(3,2)

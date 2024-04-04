@@ -77,9 +77,13 @@ def implicitly_restarted_lanczos(matrixaction, x, neigs, nkrylov, tol=1e-12, max
         # The residual of the calculation is taken as the norm of the
         # (m+1)-th column vector in the arnoldi iteration.
         rm = torch.abs(H[m,m-1]).cpu().numpy()
-        print(f"{iter}, {rm}", flush=True)
-        if rm < tol :
-            print(f"IRAM converged in {iter} iterations.")
+        if iter == 0:
+            tolerance = max(tol*rm,tol)
+            #r0 = rm # save the initial residual
+
+        #print(f"{iter}, {rm}", flush=True)
+        if rm < tolerance :
+            print(f"IRLM converged in {iter} iterations.",flush=True)
             # Compute the eigenpairs and return
             ind = torch.argsort(H_evals, descending=False)[0:m]
             eigenvalues = H_evals[ind]
@@ -115,8 +119,8 @@ def implicitly_restarted_lanczos(matrixaction, x, neigs, nkrylov, tol=1e-12, max
         # Generate the m+1:k Arnoldi vectors
         last_index = lanczos_iteration(matrixaction, H, U, p, k)  
 
-    if rm > tol:
-        print(f"WARNING: Truncation error estimate not below tolerance : {rm} ({tol})")
+    if rm > tolerance:
+        print(f"WARNING: Truncation error estimate not below tolerance : {rm} ({tolerance})",flush=True)
 
     # Compute the eigenpairs and return
     ind = torch.argsort(H_evals, descending=False)[0:m]

@@ -49,6 +49,30 @@ class Masks:
                 torch.logical_not(self.psi_distbound1),
                 self.psi)
 
+        self.u_bound = torch.logical_and(self.not_u[0,0,:,:],
+                                        F.avg_pool2d(self.u.type(mtype), (3,3), stride=(1,1),padding=(1,1))[0,0] > 1/18)
+
+        self.v_bound = torch.logical_and(self.not_v[0,0,:,:],
+                                        F.avg_pool2d(self.v.type(mtype), (3,3), stride=(1,1),padding=(1,1))[0,0] > 1/18)
+        # To do : need to verify q_irrbound_[x,y]ids
+        # The irregular points for the laplacian with
+        # neumann boundary conditions are the points that
+        # straddle the boundary; recall that we are using the tracer points
+        # for the pv locations and the boundary points lie on tracer cell edges.
+        # self.q_irrbound_xids, self.q_irrbound_yids = torch.where(
+        #         torch.logical_and(self.not_q[0,0,1:-1,1:-1],
+        #                           F.avg_pool2d(self.q.type(mtype), (3,3), stride=(1,1))[0,0] > 1/18)
+        #     )
+
+        # This gets us cells that are in the boundary (not_q = 1 in the boundary) and right on the border with
+        # the interior
+        #self.q_bound_b = torch.logical_and(self.not_q[0,0,:,:],
+        #                               F.avg_pool2d(self.q.type(mtype), (3,3), stride=(1,1),padding=(1,1))[0,0] > 1/18)
+
+        # This gets us cells that are in the interior (q = 1 in the interior) and right on the border with the boundary
+        self.q_bound = torch.logical_and(self.q[0,0,:,:],
+                                        F.avg_pool2d(self.not_q.type(mtype), (3,3), stride=(1,1),padding=(1,1))[0,0] > 1/18)
+        
         self.q_distbound1 = torch.logical_and(
             F.avg_pool2d(self.q.type(mtype), (3,3), stride=(1,1), padding=(1,1)) < 17/18,
             self.q)
@@ -98,71 +122,3 @@ class Masks:
         self.v_distbound2 = self.v_distbound2.type(mtype)
         self.v_distbound2plus = self.v_distbound2plus.type(mtype)
         self.v_distbound3plus = self.v_distbound3plus.type(mtype)
-
-
-
-if __name__ == "__main__":
-    import numpy as np
-    import matplotlib
-    matplotlib.rcParams.update({'font.size': 24})
-    import matplotlib.pyplot as plt
-
-    n = 6
-    mask = torch.ones(n,n)
-    mask[1,0] = 0.
-    mask[n-1,2] = 0.
-    mask[0,n-2] = 0.
-    mask[1,n-2] = 0.
-    mask[0,n-1] = 0.
-    mask[1,n-1] = 0.
-    mask[2,n-1] = 0.
-
-    masks = Masks(mask)
-
-    plt.ion()
-    f,a =plt.subplots(figsize=(9,9))
-    a.imshow(mask.T, origin='lower', cmap='Greys_r', interpolation=None, vmin=-1)
-    a.set_xticks(np.arange(-0.5,n+0.5)), a.set_yticks(np.arange(-0.5,n+0.5))
-    a.grid()
-
-    s = 90
-    s2 = 130
-    q_xmin, q_ymin = 0, 0
-    mask_q_ids = torch.argwhere(masks.q.squeeze())
-    a.scatter(q_xmin+mask_q_ids[:,0], q_ymin+mask_q_ids[:,1],
-                s=s, marker='o', label='q', color='mediumseagreen')
-
-    psi_xmin, psi_ymin = -.5, -.5
-    mask_psi_ids = torch.argwhere(masks.psi.squeeze())
-    a.scatter(psi_xmin+mask_psi_ids[:,0], psi_ymin+mask_psi_ids[:,1],
-              s=s, marker='s', label='$\\psi$', color='black')
-    a.scatter(psi_xmin+1+masks.psi_irrbound_xids,psi_ymin+1+masks.psi_irrbound_yids,
-              s=s, marker='o', label='$\mathcal{I}$', color='purple')
-
-    u_xmin, u_ymin = -.5, 0
-    mask_u_ids = torch.argwhere(masks.u_distbound1.squeeze())
-    a.scatter(u_xmin+mask_u_ids[:,0], u_ymin+mask_u_ids[:,1],
-                s=s2, marker='>', label='u ic2', color='lightblue')
-    mask_u_ids = torch.argwhere(masks.u_distbound2.squeeze())
-    a.scatter(u_xmin+mask_u_ids[:,0], u_ymin+mask_u_ids[:,1],
-                s=s2, marker='>', label='u iup3', color='cornflowerblue')
-    mask_u_ids = torch.argwhere(masks.u_distbound3plus.squeeze())
-    a.scatter(u_xmin+mask_u_ids[:,0], u_ymin+mask_u_ids[:,1],
-                s=s2, marker='>', label='u iup5', color='navy')
-
-    v_xmin, v_ymin = 0, -.5
-    mask_v_ids = torch.argwhere(masks.v_distbound1.squeeze())
-    a.scatter(v_xmin+mask_v_ids[:,0], v_ymin+mask_v_ids[:,1],
-                s=s2, marker='^', label='v ic2', color='gold')
-    mask_v_ids = torch.argwhere(masks.v_distbound2plus.squeeze())
-    a.scatter(v_xmin+mask_v_ids[:,0], v_ymin+mask_v_ids[:,1],
-                s=s2, marker='^', label='v iup3', color='darkorange')
-    mask_v_ids = torch.argwhere(masks.v_distbound3plus.squeeze())
-    a.scatter(v_xmin+mask_v_ids[:,0], v_ymin+mask_v_ids[:,1],
-                s=s2, marker='^', label='v iup5', color='firebrick')
-
-
-
-    f.legend(loc='upper left')
-    plt.setp(a.get_xticklabels(), visible=False)
-    plt.setp(a.get_yticklabels(), visible=False)
