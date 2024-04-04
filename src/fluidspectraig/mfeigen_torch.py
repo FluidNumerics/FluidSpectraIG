@@ -26,7 +26,7 @@ def implicitly_restarted_lanczos(matrixaction, x, neigs, nkrylov, tol=1e-12, max
 
       matrixaction - A method that takes in data stored in a torch array of x.shape and returns a torch array
                      of shape x.shape. This method is assumed to a linear operator whose matrix-form equivalent
-                     is a symmtric matrix
+                     is a symmtric negative-definite matrix
 
       x            - A seed vector for the IRLM
 

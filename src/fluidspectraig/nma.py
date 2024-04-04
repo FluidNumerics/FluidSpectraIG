@@ -77,8 +77,6 @@ class NMA:
         self.Lx = param['Lx']
         self.ny = param['ny']
         self.Ly = param['Ly']
-        # self.nmodes = param['nmodes']
-        # self.nkrylov = param['nkrylov']
         self.device = param['device']
         self.dtype = torch.float64
         self.pcg_tol = 1e-24
@@ -87,7 +85,7 @@ class NMA:
 
         self.n_neumann = 0
         self.n_dirichlet = 0
-        self.n_shift = -1e-2 # default to make system positive definite
+        self.n_shift = 1e-2 # default to make system negative definite
         self.d_shift = 0.0
 
         # grid
@@ -105,9 +103,6 @@ class NMA:
         mask = param['mask'] if 'mask' in param.keys()  else torch.ones(self.nx, self.ny)
         self.masks = Masks(mask.type(self.dtype).to(self.device))
 
-        # auxillary matrices for elliptic equation
-        self.compute_auxillary_matrices()
-
         # precompile torch functions
         comp =  torch.__version__[0] == '2'
         self.laplacian_g = torch.compile(laplacian_g) if comp else laplacian_g
@@ -116,62 +111,23 @@ class NMA:
         self.identity_preconditioner = torch.compile(identity_preconditioner) if comp else identity_preconditioner
         self.jacobi_preconditioner = torch.compile(jacobi_preconditioner) if comp else jacobi_preconditioner
 
-        if "inverter" in param.keys():
-            if param['inverter'] == 'dft':
-                self.dirichlet_matrix_inverse = self.laplacian_g_inverse_dst
-                self.neumann_matrix_inverse = self.laplacian_c_inverse_dct
-            elif param['inverter'] == 'pcg':
-                print(f"Using PCG matrix inversion method not found",flush=True)
-                self.dirichlet_matrix_inverse = self.laplacian_g_inverse_pcg
-                self.neumann_matrix_inverse = self.laplacian_c_inverse_pcg
-                self.laplacian_c_preconditioner = self.jacobi_preconditioner
-                self.laplacian_g_preconditioner = self.jacobi_preconditioner
 
-            else:
-                print(f"Matrix inversion method not found : {param['inverter']}",flush=True)
-                print(f"Defaulting to dft inverter",flush=True)
-                self.dirichlet_matrix_inverse = self.laplacian_g_inverse_dst
-                self.neumann_matrix_inverse = self.laplacian_c_inverse_dct
-        else:
-            # If inverter is not specified, use dst/dct
-            self.dirichlet_matrix_inverse = self.laplacian_g_inverse_dst
-            self.neumann_matrix_inverse = self.laplacian_c_inverse_dct
+        print(f"Using PCG matrix inversion method",flush=True)
+        self.dirichlet_matrix_inverse = self.laplacian_g_inverse_pcg
+        self.neumann_matrix_inverse = self.laplacian_c_inverse_pcg
+        self.laplacian_c_preconditioner = self.jacobi_preconditioner
+        self.laplacian_g_preconditioner = self.jacobi_preconditioner
 
         if not comp:
             print('Need torch >= 2.0 to use torch.compile, current version '
                  f'{torch.__version__}, the solver will be slower! ')
 
-    def compute_auxillary_matrices(self):
-        # function adapted from github.com/louity/MQGeometry
-        # Copyright (c) 2023 louity
-        nx, ny = self.nx, self.ny
-        laplace_dst = compute_laplace_dst(
-                nx, ny, self.dx, self.dy, self.arr_kwargs).unsqueeze(0).unsqueeze(0)
-        self.helmholtz_dst =  laplace_dst
-
-        laplace_dct = compute_laplace_dct(
-                nx, ny, self.dx, self.dy, self.arr_kwargs).unsqueeze(0).unsqueeze(0)
-        self.helmholtz_dct =  laplace_dct
-
-        # homogeneous Helmholtz solutions
-        cst = torch.ones((1, nx+1, ny+1), **self.arr_kwargs)
-        if len(self.masks.psi_irrbound_xids) > 0:
-            self.cap_matrices_dst = compute_dst_capacitance_matrices(
-                self.helmholtz_dst, self.masks.psi_irrbound_xids,
-                self.masks.psi_irrbound_yids)
-        else:
-            self.cap_matrices_dst = None
-
-        self.cap_matrices_dct = None
-
-        self.helmholtz_dst = self.helmholtz_dst.type(self.dtype)
-        self.helmholtz_dct = self.helmholtz_dct.type(self.dtype)
 
     def apply_laplacian_c(self,x):
         return self.laplacian_c(x,self.masks.u, self.masks.v, self.n_shift,self.dx,self.dy)*self.masks.q.squeeze()
 
     def apply_laplacian_c_preconditioner(self,r):
-        return self.laplacian_c_preconditioner(r,self.masks.q,self.n_shift,self.dx,self.dy)*self.masks.q.squeeze()
+        return self.laplacian_c_preconditioner(r,self.masks.q,self.n_shift,self.dx,self.dy)
 
     def laplacian_c_inverse_pcg(self,b):
         """Inverts the laplacian with homogeneous neumann boundary conditions
@@ -184,14 +140,6 @@ class NMA:
                    self.apply_laplacian_c_preconditioner,
                    x0, b,tol=self.pcg_tol, max_iter=self.pcg_max_iter,
                    arr_kwargs = self.arr_kwargs)*self.masks.q.squeeze()
-
-    def laplacian_c_inverse_dct(self,b):
-        """Inverts the laplacian with homogeneous neumann boundary conditions
-        defined on the tracer points"""
-        # function adapted from github.com/louity/MQGeometry
-        # Copyright (c) 2023 louity
-        
-        return -solve_helmholtz_dct(b, self.helmholtz_dct)
 
     def apply_laplacian_g(self,f):
         fm_g = self.masks.psi.squeeze()*f # Mask the data to apply homogeneous dirichlet boundary conditions
@@ -211,22 +159,6 @@ class NMA:
                    self.apply_laplacian_g_preconditioner,
                    x0, b,tol=self.pcg_tol, max_iter=self.pcg_max_iter,
                    arr_kwargs = self.arr_kwargs)*self.masks.psi.squeeze()
-
-    def laplacian_g_inverse_dst(self,b):
-        """Inverts the laplacian with homogeneous dirichlet boundary conditions
-        defined on the vorticity points"""
-        # function adapted from github.com/louity/MQGeometry
-        # Copyright (c) 2023 louity
-        
-        if self.cap_matrices_dst is not None:
-            return -solve_helmholtz_dst_cmm(
-                    b[...,1:-1,1:-1]*self.masks.psi[...,1:-1,1:-1],
-                    self.helmholtz_dst, self.cap_matrices_dst,
-                    self.masks.psi_irrbound_xids,
-                    self.masks.psi_irrbound_yids,
-                    self.masks.psi)
-        else:
-            return -solve_helmholtz_dst(b[...,1:-1,1:-1], self.helmholtz_dst)             
 
     def calculate_dirichlet_modes(self, nmodes, nkrylov=-1, mode="shift_invert", tol=1e-12, max_iter=100):
         """Uses IRLM to calcualte the N smallest eigenmodes, corresponding to the 
@@ -268,7 +200,7 @@ class NMA:
             v0 = torch.rand(self.xc.shape, **self.arr_kwargs)
             v0 = v0 - v0.mean()
         
-            evals, eigenvectors, r, last_iterate = implicitly_restarted_lanczos(self.laplacian_c_inverse_dct, v0,
+            evals, eigenvectors, r, last_iterate = implicitly_restarted_lanczos(self.neumann_matrix_inverse, v0,
                 nmodes, nkrylov, tol=tol, max_iter=max_iter,
                 arr_kwargs = self.arr_kwargs)
 

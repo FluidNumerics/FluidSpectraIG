@@ -7,8 +7,8 @@ from fluidspectraig.mfeigen_torch import dot,norm
 import time
 from torch.profiler import profile, record_function, ProfilerActivity
 
-nx = 64
-ny = 64
+nx = 256
+ny = 256
 Lx = 1.0#5120.0e3
 Ly = 1.0#5120.0e3
 nmodes = 100
@@ -30,9 +30,8 @@ param = {'nx': nx,
          'ny': ny,
          'Lx': Lx,
          'Ly': Ly,
-         'mask': mask,
          'device': device,
-         'inverter': 'pcg',
+         'mask': mask,
          'dtype': torch.float64}
 
 model = NMA(param)
@@ -114,6 +113,18 @@ plt.close()
 
 f,a = plt.subplots(3,2)
 for k in range(6):
+    v=nn_eigenvectors.cpu().numpy()[...,nmodes-6+k].squeeze()
+    v =np.ma.masked_where(model.masks.q.squeeze().cpu().numpy() == 0.0, v)
+    im = a.flatten()[k].imshow(v,interpolation='none')
+    f.colorbar(im, ax=a.flatten()[k],fraction=0.046,location='right')
+    a.flatten()[k].set_title(f'e_{nmodes-6+k}')
+
+plt.tight_layout()
+plt.savefig('neumann_modes_numerical_small.png')
+plt.close()
+
+f,a = plt.subplots(3,2)
+for k in range(6):
     v=eigenvectors.cpu().numpy()[...,k].squeeze()
     v =np.ma.masked_where(model.masks.psi.squeeze().cpu().numpy() == 0.0, v)
     im = a.flatten()[k].imshow(v,interpolation='none')
@@ -122,6 +133,18 @@ for k in range(6):
     
 plt.tight_layout()
 plt.savefig('dirichlet_modes_numerical.png')
+plt.close()
+
+f,a = plt.subplots(3,2)
+for k in range(6):
+    v=eigenvectors.cpu().numpy()[...,nmodes-6+k].squeeze()
+    v =np.ma.masked_where(model.masks.psi.squeeze().cpu().numpy() == 0.0, v)
+    im = a.flatten()[k].imshow(v,interpolation='none')
+    f.colorbar(im, ax=a.flatten()[k],fraction=0.046,location='right')
+    a.flatten()[k].set_title(f'e_{nmodes-6+k}')
+    
+plt.tight_layout()
+plt.savefig('dirichlet_modes_numerical_small.png')
 plt.close()
 
 
