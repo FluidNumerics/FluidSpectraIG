@@ -65,7 +65,7 @@ from fluidspectraig.helmholtz import compute_laplace_dst, solve_helmholtz_dst, \
                       compute_laplace_dct, solve_helmholtz_dct
 from fluidspectraig.masks import Masks
 from fluidspectraig.mfeigen_torch import implicitly_restarted_lanczos,norm, dot
-from fluidspectraig.mfpcg_torch import pcg
+from fluidspectraig.mfkrylov_torch import pcg, pminres
 from fluidspectraig.elliptic import laplacian_c, laplacian_g, \
                       identity_preconditioner, jacobi_preconditioner
 zeroTol = 1e-12
@@ -79,7 +79,11 @@ class NMA:
         self.Ly = param['Ly']
         self.device = param['device']
         self.dtype = torch.float64
-        self.pcg_tol = 1e-24
+        if 'matrix_inverter' in param.keys():
+            self.matrix_inverter = param['matrix_inverter']
+        else:
+            self.matrix_inverter = 'pcg'
+        self.pcg_tol = 1e-14
         self.pcg_max_iter = 1500
         self.arr_kwargs = {'dtype':self.dtype, 'device': self.device}
 
@@ -111,10 +115,21 @@ class NMA:
         self.identity_preconditioner = torch.compile(identity_preconditioner) if comp else identity_preconditioner
         self.jacobi_preconditioner = torch.compile(jacobi_preconditioner) if comp else jacobi_preconditioner
 
+ 
+        if self.matrix_inverter == 'pcg':
+            print(f"Using PCG matrix inversion method",flush=True)
+            self.dirichlet_matrix_inverse = self.laplacian_g_inverse_pcg
+            self.neumann_matrix_inverse = self.laplacian_c_inverse_pcg
+        elif self.matrix_inverter == 'pminres':
+            print(f"Using MINRES matrix inversion method",flush=True)
+            self.dirichlet_matrix_inverse = self.laplacian_g_inverse_pminres
+            self.neumann_matrix_inverse = self.laplacian_c_inverse_pminres
+        else:
+            print(f"Matrix inversion {self.matrix_inverter} unknown. Using PCG matrix inversion method",flush=True)
+            self.dirichlet_matrix_inverse = self.laplacian_g_inverse_pcg
+            self.neumann_matrix_inverse = self.laplacian_c_inverse_pcg
 
-        print(f"Using PCG matrix inversion method",flush=True)
-        self.dirichlet_matrix_inverse = self.laplacian_g_inverse_pcg
-        self.neumann_matrix_inverse = self.laplacian_c_inverse_pcg
+
         self.laplacian_c_preconditioner = self.jacobi_preconditioner
         self.laplacian_g_preconditioner = self.jacobi_preconditioner
 
@@ -141,6 +156,19 @@ class NMA:
                    x0, b,tol=self.pcg_tol, max_iter=self.pcg_max_iter,
                    arr_kwargs = self.arr_kwargs)*self.masks.q.squeeze()
 
+    def laplacian_c_inverse_pminres(self,b):
+        """Inverts the laplacian with homogeneous neumann boundary conditions
+        defined on the tracer points"""
+
+        x0 = torch.rand(self.xc.shape,**self.arr_kwargs)
+        x0 = x0 - x0.mean()
+
+        return pminres(self.apply_laplacian_c, 
+                   self.apply_laplacian_c_preconditioner,
+                   x0, b,tol=self.pcg_tol, max_iter=self.pcg_max_iter,
+                   arr_kwargs = self.arr_kwargs)*self.masks.q.squeeze()
+
+
     def apply_laplacian_g(self,f):
         fm_g = self.masks.psi.squeeze()*f # Mask the data to apply homogeneous dirichlet boundary conditions
         return self.masks.psi.squeeze()*self.laplacian_g(fm_g,self.masks.psi,self.d_shift,self.dx,self.dy)
@@ -159,6 +187,17 @@ class NMA:
                    self.apply_laplacian_g_preconditioner,
                    x0, b,tol=self.pcg_tol, max_iter=self.pcg_max_iter,
                    arr_kwargs = self.arr_kwargs)*self.masks.psi.squeeze()
+
+    def laplacian_g_inverse_pminres(self,b):
+        """Inverts the laplacian with homogeneous dirichlet boundary conditions
+        defined on the vorticity points"""
+
+        x0 = torch.rand(self.nx+1,self.ny+1,**self.arr_kwargs)
+        return pminres(self.apply_laplacian_g, 
+                   self.apply_laplacian_g_preconditioner,
+                   x0, b,tol=self.pcg_tol, max_iter=self.pcg_max_iter,
+                   arr_kwargs = self.arr_kwargs)*self.masks.psi.squeeze()
+
 
     def calculate_dirichlet_modes(self, nmodes, nkrylov=-1, mode="shift_invert", tol=1e-12, max_iter=100):
         """Uses IRLM to calcualte the N smallest eigenmodes, corresponding to the 
@@ -218,7 +257,47 @@ class NMA:
 
         return eigenvalues, eigenvectors, r, last_iterate
     
-  
+    def eigenmode_search(self,nclusters=1,nmodes=10,nkrylov=-1,tol=1e-12,max_iter=100):
+        """
+        This routine provides a high level workflow for finding a range of eigenpairs
+        across all length scales in a domain.  
+        """
+
+        # Find the largest dirichlet and neumann eigenmodes
+        d_eigenvalues, d_eigenvectors, r, last_iterate = self.calculate_dirichlet_modes(nmodes, nkrylov, mode="largest", tol=tol, max_iter=max_iter)
+        n_eigenvalues, n_eigenvectors, r, last_iterate = self.calculate_neumann_modes(nmodes, nkrylov, mode="largest", tol=tol, max_iter=max_iter)
+
+        # Find the smallest dirichlet and neumann eigenmodes
+        evals, evecs, r, last_iterate = self.calculate_dirichlet_modes(nmodes, nkrylov, mode="shift_invert", tol=tol, max_iter=max_iter)
+        # stack evals and evecs on eigenvalues and eigenvectors
+
+        evals, evecs, r, last_iterate = self.calculate_neumann_modes(nmodes, nkrylov, mode="shift_invert", tol=tol, max_iter=max_iter)
+        # stack evals and evecs on eigenvalues and eigenvectors
+
+        # Compute the shifts. For each type (dirichlet and neumann)
+        # we want to have "nclusters" of eigenmodes that are centered
+        # around the shifts.
+        #
+        # each shift is computed as 
+        #
+        #   ds = (e_high - e_low)/nclusters
+        #   shift = e_low + ds*(i+1/2); i = [0,nclusters)
+        #
+        # where "e_high" is the highest estimated eigenvalue
+        # and "e_low" is the lowest estimated eigenvalue
+        #
+        #  For each shift (dirichlet)
+        #     compute eigenvalues, eigenvectors in the neighborhood of shift
+        #
+        #  For each shift (neumann)
+        #     compute eigenvalues, eigenvectors in the neighborhood of shift
+        #
+        #
+        #  Verify orthogonality
+        #
+        #
+        #  save eigenvalues and eigenvectors to disk
+        #
     # def findEigenmodes(self, nmodes=10, tolerance=0, deShift=0, neShift=1e-2):
     #     """Finds the eigenmodes using sci-py `eigsh`.
 
