@@ -79,12 +79,16 @@ class NMA:
         self.Ly = param['Ly']
         self.device = param['device']
         self.dtype = torch.float64
-        if 'matrix_inverter' in param.keys():
-            self.matrix_inverter = param['matrix_inverter']
+        if 'kryolv_tol' in param.keys():
+            self.krylov_tol = param['krylov_tol']
         else:
-            self.matrix_inverter = 'pcg'
-        self.pcg_tol = 1e-14
-        self.pcg_max_iter = 1500
+            self.krylov_tol = 1e-24
+        
+        if 'krylov_max_iter' in param.keys():
+            self.krylov_max_iter = param['krylov_max_iter']
+        else:
+            self.krylov_max_iter = 2500
+            
         self.arr_kwargs = {'dtype':self.dtype, 'device': self.device}
 
         self.n_neumann = 0
@@ -115,23 +119,23 @@ class NMA:
         self.identity_preconditioner = torch.compile(identity_preconditioner) if comp else identity_preconditioner
         self.jacobi_preconditioner = torch.compile(jacobi_preconditioner) if comp else jacobi_preconditioner
 
- 
-        if self.matrix_inverter == 'pcg':
-            print(f"Using PCG matrix inversion method",flush=True)
-            self.dirichlet_matrix_inverse = self.laplacian_g_inverse_pcg
-            self.neumann_matrix_inverse = self.laplacian_c_inverse_pcg
-        elif self.matrix_inverter == 'pminres':
-            print(f"Using MINRES matrix inversion method",flush=True)
-            self.dirichlet_matrix_inverse = self.laplacian_g_inverse_pminres
-            self.neumann_matrix_inverse = self.laplacian_c_inverse_pminres
+        if 'preconditioner' in param.keys():
+            if param['preconditioner'] == None:
+                print(f"Setting preconditioner to None",flush=True)
+                self.laplacian_c_preconditioner = self.identity_preconditioner
+                self.laplacian_g_preconditioner = self.identity_preconditioner
+            elif param['preconditioner'] == 'jacobi':
+                print(f"Setting preconditioner to Jacobi preconditioner",flush=True)
+                self.laplacian_c_preconditioner = self.jacobi_preconditioner
+                self.laplacian_g_preconditioner = self.jacobi_preconditioner
+            else:
+                print(f"Setting preconditioner to Jacobi preconditioner",flush=True)
+                self.laplacian_c_preconditioner = self.jacobi_preconditioner
+                self.laplacian_g_preconditioner = self.jacobi_preconditioner
         else:
-            print(f"Matrix inversion {self.matrix_inverter} unknown. Using PCG matrix inversion method",flush=True)
-            self.dirichlet_matrix_inverse = self.laplacian_g_inverse_pcg
-            self.neumann_matrix_inverse = self.laplacian_c_inverse_pcg
-
-
-        self.laplacian_c_preconditioner = self.jacobi_preconditioner
-        self.laplacian_g_preconditioner = self.jacobi_preconditioner
+            print(f"Setting preconditioner to Jacobi preconditioner",flush=True)
+            self.laplacian_c_preconditioner = self.jacobi_preconditioner
+            self.laplacian_g_preconditioner = self.jacobi_preconditioner
 
         if not comp:
             print('Need torch >= 2.0 to use torch.compile, current version '
@@ -153,7 +157,7 @@ class NMA:
 
         return pcg(self.apply_laplacian_c, 
                    self.apply_laplacian_c_preconditioner,
-                   x0, b,tol=self.pcg_tol, max_iter=self.pcg_max_iter,
+                   x0, b,tol=self.krylov_tol, max_iter=self.krylov_max_iter,
                    arr_kwargs = self.arr_kwargs)*self.masks.q.squeeze()
 
     def laplacian_c_inverse_pminres(self,b):
@@ -165,7 +169,7 @@ class NMA:
 
         return pminres(self.apply_laplacian_c, 
                    self.apply_laplacian_c_preconditioner,
-                   x0, b,tol=self.pcg_tol, max_iter=self.pcg_max_iter,
+                   x0, b,tol=self.krylov_tol, max_iter=self.krylov_max_iter,
                    arr_kwargs = self.arr_kwargs)*self.masks.q.squeeze()
 
 
@@ -174,10 +178,9 @@ class NMA:
         return self.masks.psi.squeeze()*self.laplacian_g(fm_g,self.masks.psi,self.d_shift,self.dx,self.dy)
 
     def apply_laplacian_g_preconditioner(self,r):
-        """If some dirichlet modes are found already, we use those modes to precondition the system"""
+        """Applies preconditioner for the Laplacian with Dirichlet boundary conditions"""
         return self.laplacian_g_preconditioner(r,self.masks.psi,self.d_shift,self.dx,self.dy)
 
-        
     def laplacian_g_inverse_pcg(self,b):
         """Inverts the laplacian with homogeneous dirichlet boundary conditions
         defined on the vorticity points"""
@@ -185,7 +188,7 @@ class NMA:
         x0 = torch.rand(self.nx+1,self.ny+1,**self.arr_kwargs)
         return pcg(self.apply_laplacian_g, 
                    self.apply_laplacian_g_preconditioner,
-                   x0, b,tol=self.pcg_tol, max_iter=self.pcg_max_iter,
+                   x0, b,tol=self.krylov_tol, max_iter=self.krylov_max_iter,
                    arr_kwargs = self.arr_kwargs)*self.masks.psi.squeeze()
 
     def laplacian_g_inverse_pminres(self,b):
@@ -195,11 +198,11 @@ class NMA:
         x0 = torch.rand(self.nx+1,self.ny+1,**self.arr_kwargs)
         return pminres(self.apply_laplacian_g, 
                    self.apply_laplacian_g_preconditioner,
-                   x0, b,tol=self.pcg_tol, max_iter=self.pcg_max_iter,
+                   x0, b,tol=self.krylov_tol, max_iter=self.krylov_max_iter,
                    arr_kwargs = self.arr_kwargs)*self.masks.psi.squeeze()
 
 
-    def calculate_dirichlet_modes(self, nmodes, nkrylov=-1, mode="shift_invert", tol=1e-12, max_iter=100):
+    def calculate_dirichlet_modes(self, nmodes, nkrylov=-1, mode="smallest", shift=None, tol=1e-8, max_iter=200):
         """Uses IRLM to calcualte the N smallest eigenmodes, corresponding to the 
         largest length scales, of the Laplacian operator with homogeneous dirichlet
         boundary conditions."""
@@ -208,11 +211,31 @@ class NMA:
             nkrylov = nmodes + 10
             
         if mode == "shift_invert":
+
+            print(f"Using PMINRES matrix inversion method",flush=True)
+
+            if shift == None:
+                self.d_shift = 0.0
+            else:
+                self.d_shift = shift
+
             # create an initial guess/seed vector for IRLM
-            #v0 = self.xg*(self.xg-self.Lx)*self.yg*(self.yg-self.Ly)
             v0 = torch.rand(self.xg.shape, **self.arr_kwargs)
 
-            evals, eigenvectors, r, last_iterate = implicitly_restarted_lanczos(self.dirichlet_matrix_inverse, v0,
+            evals, eigenvectors, r, last_iterate = implicitly_restarted_lanczos(self.laplacian_g_inverse_pminres, v0,
+                nmodes, nkrylov, tol=tol, max_iter=max_iter,
+                arr_kwargs = self.arr_kwargs)
+
+            eigenvalues = 1.0/evals + self.d_shift
+
+        elif mode == "smallest":
+
+            print(f"Using PCG matrix inversion method",flush=True)
+
+            self.d_shift = 0.0
+            v0 = torch.rand(self.xg.shape, **self.arr_kwargs)
+
+            evals, eigenvectors, r, last_iterate = implicitly_restarted_lanczos(self.laplacian_g_inverse_pcg, v0,
                 nmodes, nkrylov, tol=tol, max_iter=max_iter,
                 arr_kwargs = self.arr_kwargs)
 
@@ -220,13 +243,16 @@ class NMA:
 
         elif mode == "largest":
 
+            self.d_shift = 0.0
+            v0 = torch.rand(self.xg.shape, **self.arr_kwargs)
+
             eigenvalues, eigenvectors, r, last_iterate = implicitly_restarted_lanczos(self.apply_laplacian_g, v0,
                 nmodes, nkrylov, tol=tol, max_iter=max_iter,
                 arr_kwargs = self.arr_kwargs)
 
         return eigenvalues, eigenvectors, r, last_iterate
 
-    def calculate_neumann_modes(self, nmodes, nkrylov=-1, mode="shift_invert", tol=1e-12, max_iter=100):
+    def calculate_neumann_modes(self, nmodes, nkrylov=-1, mode="smallest", shift=None, tol=1e-8, max_iter=200):
         """Uses IRLM to calcualte the N smallest eigenmodes, corresponding to the 
         largest length scales, of the Laplacian operator with homogeneous dirichlet
         boundary conditions."""
@@ -235,17 +261,43 @@ class NMA:
             nkrylov = nmodes + 10
         
         if mode == "shift_invert":
+
+            print(f"Using PMINRES matrix inversion method",flush=True)
+
+            if shift == None:
+                self.n_shift = 0.0
+            else:
+                self.n_shift = shift
+
             # create an initial guess/seed vector for IRLM
             v0 = torch.rand(self.xc.shape, **self.arr_kwargs)
             v0 = v0 - v0.mean()
         
-            evals, eigenvectors, r, last_iterate = implicitly_restarted_lanczos(self.neumann_matrix_inverse, v0,
+            evals, eigenvectors, r, last_iterate = implicitly_restarted_lanczos(self.laplacian_c_inverse_pminres, v0,
+                nmodes, nkrylov, tol=tol, max_iter=max_iter,
+                arr_kwargs = self.arr_kwargs)
+
+            eigenvalues = 1.0/evals + self.n_shift
+
+        elif mode == "smallest":
+
+            print(f"Using PCG matrix inversion method",flush=True)
+
+            self.n_shift = 1e-2 # to use pcg, need to make the system negative definite
+
+            # create an initial guess/seed vector for IRLM
+            v0 = torch.rand(self.xc.shape, **self.arr_kwargs)
+            v0 = v0 - v0.mean()
+        
+            evals, eigenvectors, r, last_iterate = implicitly_restarted_lanczos(self.laplacian_c_inverse_pcg, v0,
                 nmodes, nkrylov, tol=tol, max_iter=max_iter,
                 arr_kwargs = self.arr_kwargs)
 
             eigenvalues = 1.0/evals + self.n_shift
 
         elif mode == "largest":
+
+            self.n_shift = 0.0
             # create an initial guess/seed vector for IRLM
             v0 = torch.rand(self.xc.shape, **self.arr_kwargs)
             v0 = v0 - v0.mean()
@@ -257,22 +309,88 @@ class NMA:
 
         return eigenvalues, eigenvectors, r, last_iterate
     
-    def eigenmode_search(self,nclusters=1,nmodes=10,nkrylov=-1,tol=1e-12,max_iter=100):
+    def model_area_g(self):
+        return torch.sum( self.masks.psi*self.dx*self.dy ) 
+    
+    def model_area_c(self):
+        return torch.sum( self.masks.q*self.dx*self.dy ) 
+
+    def eigenmode_search(self,nclusters=1,nmodes=10,nkrylov=-1,tol=1e-7,max_iter=100):
         """
         This routine provides a high level workflow for finding a range of eigenpairs
         across all length scales in a domain.  
         """
+        import h5py
+        import time
+        from numpy import pi 
 
-        # Find the largest dirichlet and neumann eigenmodes
-        d_eigenvalues, d_eigenvectors, r, last_iterate = self.calculate_dirichlet_modes(nmodes, nkrylov, mode="largest", tol=tol, max_iter=max_iter)
-        n_eigenvalues, n_eigenvectors, r, last_iterate = self.calculate_neumann_modes(nmodes, nkrylov, mode="largest", tol=tol, max_iter=max_iter)
+        n_total_modes = nclusters*nmodes
+
+        d_eigenvectors = torch.zeros(sum((self.xg.shape, (n_total_modes,)), ()),**self.arr_kwargs)
+        n_eigenvectors = torch.zeros(sum((self.xc.shape, (n_total_modes,)), ()),**self.arr_kwargs)
+
+        d_eigenvalues = torch.zeros(n_total_modes,**self.arr_kwargs)
+        n_eigenvalues = torch.zeros(n_total_modes,**self.arr_kwargs)
 
         # Find the smallest dirichlet and neumann eigenmodes
-        evals, evecs, r, last_iterate = self.calculate_dirichlet_modes(nmodes, nkrylov, mode="shift_invert", tol=tol, max_iter=max_iter)
-        # stack evals and evecs on eigenvalues and eigenvectors
+        e1 = 0
+        e2 = nmodes
+        print("------------------------------------------",flush=True)
+        print("Searching for smallest Dirichlet modes", flush=True)
+        tic = time.perf_counter()
+        d_eigenvalues[e1:e2], d_eigenvectors[:,:,e1:e2], r, n_iters = self.calculate_dirichlet_modes(nmodes, nkrylov, mode="smallest", tol=tol, max_iter=max_iter)
+        toc = time.perf_counter()
+        runtime = toc - tic
+        print(f"Dirichlet mode runtime : {runtime} s",flush=True)
+        print(f"Dirichlet mode runtime per iterate : {runtime/n_iters} [s/iterate]", flush=True)
 
-        evals, evecs, r, last_iterate = self.calculate_neumann_modes(nmodes, nkrylov, mode="shift_invert", tol=tol, max_iter=max_iter)
-        # stack evals and evecs on eigenvalues and eigenvectors
+        print("------------------------------------------",flush=True)
+        print("Searching for smallest Neumann modes", flush=True)
+        tic = time.perf_counter()
+        n_eigenvalues[e1:e2], n_eigenvectors[:,:,e1:e2], r, n_iters = self.calculate_neumann_modes(nmodes, nkrylov, mode="smallest", tol=tol, max_iter=max_iter)
+        toc = time.perf_counter()
+        runtime = toc - tic
+        print(f"Neumann mode runtime : {runtime} s",flush=True)
+        print(f"Neumann mode runtime per iterate : {runtime/n_iters} [s/iterate]", flush=True)
+
+
+        # dirichlet modes
+        # Estimate the largest eigenmodes using Weyl's Law
+        ehigh = -4.0*pi*(self.nx)*(self.ny)/self.model_area_g()
+        elow = d_eigenvalues[0]
+        ds = (ehigh - elow)/(nclusters)
+        for i in range(nclusters-1):
+            shift = elow + ds*float(i+1)
+            e1 = (i+1)*nmodes
+            e2 = e1 + nmodes
+            print("------------------------------------------",flush=True)
+            print(f"Searching for Dirichlet modes at shift {shift}", flush=True)
+            tic = time.perf_counter()
+            d_eigenvalues[e1:e2], d_eigenvectors[:,:,e1:e2], r, last_iterate = self.calculate_dirichlet_modes(nmodes, nkrylov, mode="shift_invert", shift=shift, tol=tol, max_iter=max_iter)
+            toc = time.perf_counter()
+            runtime = toc - tic
+            print(f"Dirichlet mode runtime : {runtime} s",flush=True)
+            print(f"Dirichlet mode runtime per iterate : {runtime/n_iters} [s/iterate]", flush=True)
+
+        # neumann modes
+        # Estimate the largest eigenmodes using Weyl's Law
+        ehigh = -4.0*pi*(self.nx)*(self.ny)/self.model_area_c()
+        elow = n_eigenvalues[0]
+        ds = (ehigh - elow)/(nclusters)
+        for i in range(nclusters-1):
+            shift = elow + ds*float(i+1)
+            e1 = (i+1)*nmodes
+            e2 = e1 + nmodes
+            print("------------------------------------------",flush=True)
+            print(f"Searching for Neumann modes at shift {shift}", flush=True)
+            tic = time.perf_counter()
+            n_eigenvalues[e1:e2], n_eigenvectors[:,:,e1:e2], r, last_iterate = self.calculate_neumann_modes(nmodes, nkrylov, mode="shift_invert", shift=shift, tol=tol, max_iter=max_iter)
+            runtime = toc - tic
+            print(f"Neumann mode runtime : {runtime} s",flush=True)
+            print(f"Neumann mode runtime per iterate : {runtime/n_iters} [s/iterate]", flush=True)
+
+
+        return n_eigenvalues, n_eigenvectors, d_eigenvalues, d_eigenvectors
 
         # Compute the shifts. For each type (dirichlet and neumann)
         # we want to have "nclusters" of eigenmodes that are centered

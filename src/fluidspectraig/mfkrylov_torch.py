@@ -160,8 +160,6 @@ def pminres(matrixaction, preconditioner, x0, b, tol=1e-12, max_iter=100, arr_kw
 
       # calculate residual
       dx = torch.abs(gamma2*eta)*norm(w1)
-      #rmag = norm((b - matrixaction(xk)).squeeze())
-      print(f"k, dx : {k}, {dx}/{tol*r0}")
 
       eta = -sigma2*eta
 
@@ -179,8 +177,44 @@ def pminres(matrixaction, preconditioner, x0, b, tol=1e-12, max_iter=100, arr_kw
 
     if dx > tol*r0:
         print(
-            f"MINRES method did not converge in {k+1} iterations : {delta}",
+            f"MINRES method did not converge in {k+1} iterations : {dx} ({tol*r0})",
             flush=True
         )
 
     return xk
+
+def pbicgstab(matrixaction, preconditioner, x0, b, tol=1e-12, max_iter=100, arr_kwargs = {'dtype':torch.float64, 'device':'cpu'}):
+    """Preconditioned Bi-Conjugate Gradient Stabilized (Bi-CGStab)
+    This method applies the Preconditioned Bi-CGStab Method using a matrix-free
+    method for applying the matrix action and the preconditioner.
+
+    See pg. xx of "Iterative Krylov Methods for Large Linear Systems" - Henk A. van der Vorst
+
+    Arguments
+
+      matrixaction - A method that takes in data stored in a torch array of x.shape and returns a torch array
+                     of shape x.shape. This method is assumed to a linear operator whose matrix-form equivalent
+                     is a symmetric matrix. The requirement of positive or negative definiteness is relaxed
+
+      preconditioner - A method that takes in data stored in a torch array of x.shape and returns a torch array
+                     of shape x.shape. This method is assumed to a linear operator whose matrix-form equivalent
+                     is an approximation to the inverse of the matrixaction
+
+      x0            - Initial guess for the solution
+
+      b            - Right hand side for the linear system Ax = b
+
+      tol          - (default: 1e-12) The tolerance for the convergence
+
+      max_iter     - (default: 100) The maximum number of iterations for the IRLM. The IRLM will return when either
+                     the max_iter is reached or when the truncation error is less than `tol`, whichever happens first.
+
+      arr_kwargs   - (default: {'dtype':torch.float64, 'device':'cpu'}) Torch object to specify the floating point 
+                     precision and the memory locality ('cpu' or 'cuda'). 
+
+    Output
+      x  - Torch array of shape x.shape containing the solution to Ax = b
+                      
+      r - The max-norm residual ||b-Ax||
+      
+    """

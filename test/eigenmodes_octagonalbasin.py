@@ -84,14 +84,14 @@ for row in range(nmodes):
     PtP_n[row,col] = dot( nn_eigenvectors[...,row], nn_eigenvectors[...,col] )
 
 
-f,a = plt.subplots(1,2)
-im = a[0].imshow(PtP.cpu().numpy(),interpolation='none')
-f.colorbar(im, ax=a[0],fraction=0.046,location='right')
-a[0].set_title('dirichlet mode P^T P')
+f,a = plt.subplots(1,1)
+im = a.imshow(PtP.cpu().numpy(),interpolation='none')
+#f.colorbar(im, ax=a[0],fraction=0.046,location='right')
+#a.set_title('dirichlet mode P^T P')
 
 im = a[1].imshow(PtP_n.cpu().numpy(),interpolation='none')
-f.colorbar(im, ax=a[1],fraction=0.046,location='right')
-a[1].set_title('neumann mode P^T P')
+#f.colorbar(im, ax=a[1],fraction=0.046,location='right')
+#a[1].set_title('neumann mode P^T P')
 
 plt.tight_layout()
 plt.savefig('orthogonality-verification.png')
