@@ -39,11 +39,6 @@ int main(int argc, char **argv)
    */
    PetscCall(PetscOptionsGetBool(NULL, NULL, "-hdf5", &hdf5, NULL));
 
-   /* - - - - - - - - - - - New Stage - - - - - - - - - - - - -
-                          Load system
-    - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
-//   PetscPreLoadBegin(PETSC_FALSE, "Load system");
-
    /*
       Open binary file.  Note that we use FILE_MODE_READ to indicate
       reading from this file.
@@ -72,8 +67,7 @@ int main(int argc, char **argv)
    PetscCall(MatLoad(A, fd));
 
    PetscCall(MatGetLocalSize(A, &m, &n));
-   PetscCall(PetscPrintf(PETSC_COMM_WORLD, "\n2-D Laplacian Eigenproblem, N=%" PetscInt_FMT "\n\n", N));
-
+   PetscCall(PetscPrintf(PETSC_COMM_WORLD, "\n2-D Laplacian Eigenproblem, N=%" PetscInt_FMT "\n\n", m));
 
 
 
@@ -126,6 +120,7 @@ int main(int argc, char **argv)
       PetscCall(EPSErrorView(eps, EPS_ERROR_RELATIVE, PETSC_VIEWER_STDOUT_WORLD));
       PetscCall(PetscViewerPopFormat(PETSC_VIEWER_STDOUT_WORLD));
    }
+
    PetscCall(EPSDestroy(&eps));
    PetscCall(MatDestroy(&A));
    PetscCall(SlepcFinalize());

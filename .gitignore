@@ -4,3 +4,7 @@ fluidspectraig.egg-info/
 *.out
 *.stdout
 results.*
+*.dat
+*.dat.info
+*.hdf5
+*.h5
