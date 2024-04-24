@@ -20,9 +20,22 @@ import numpy as np
 import numpy.ma as ma
 from petsc4py import PETSc
 
+def splig_load(filename_base):
+    """
+    Loads splig object attributes from numpy file {filename_base}.npz 
+    Only the grid, mask, and mapping attributes (matrix_row and i/j_indices)
+    are loaded. The intention is to use this information for processing
+    eigenvectors/eigenvalues from SLEPC.
+    """
+
+    filename = f"{filename_base}.npz"
+    print(f"Loading SPLIG from {filename}")
+    with np.load(filename) as data:
+         return splig( x = data['x'], y = data['y'], mask = data['mask'] )
+
 class splig:
     """ Sparse Laplacian - Irregular Geometry """
-    def __init__(self, x, y, mask, action, dtype=torch.float64, device='cpu' ):
+    def __init__(self, x, y, mask, action=None, dtype=torch.float64, device='cpu' ):
  
       nx, ny = mask.shape
       self.nx = nx
@@ -50,13 +63,14 @@ class splig:
       print(f"Bounding domain shape (nx,ny) : {nx}, {ny}")
       print(f"Number of degrees of freedom : {self.ndof}")
 
-      self.generate_impulse_fields()
-
-      print(f"Applying matrix action ({self.matrix_action}) to obtain impulse response function")
-      self.irf = self.matrix_action(self.impulse)
-
-      # Create the matrix in PETSc format
-      self.create_petsc_matrix()
+      if action == None:
+        self.impulse = None
+        self.irf = None
+      else:
+        self.generate_impulse_fields()
+        print(f"Applying matrix action ({self.matrix_action}) to obtain impulse response function")
+        self.irf = self.matrix_action(self.impulse)
+        self.create_petsc_matrix()
 
     def write(self,filename_base):
         """
