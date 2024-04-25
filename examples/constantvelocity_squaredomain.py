@@ -7,8 +7,8 @@ from fluidspectraig.tuml import TUML
 from fluidspectraig.splig import splig
 import os
 
-nx = 64
-ny = 64
+nx = 16
+ny = 16
 
 output_dir = f"square_domain/{nx}x{ny}"
 if not os.path.exists(output_dir):
@@ -27,11 +27,12 @@ param = {'nx': nx,
 
 model = TUML(param)
 
-
 # Getting the dirichlet mode mask, grid, and laplacian operator.
 mask_g = model.masks.psi.type(torch.int32).squeeze().cpu().numpy()
 xg = model.xg.cpu().numpy()
 yg = model.yg.cpu().numpy()
+dx = model.dx.cpu().numpy()
+dy = model.dy.cpu().numpy()
 dirichlet_matrix_action = model.apply_laplacian_g
 
 mask_c = model.masks.q.type(torch.int32).squeeze().cpu().numpy()
@@ -42,12 +43,12 @@ neumann_matrix_action = model.apply_laplacian_c
 print(f"------------------------------")
 print(f"Building dirichlet mode matrix")
 print(f"------------------------------")
-Ld = splig(xg,yg,mask_g,dirichlet_matrix_action) # Dirichlet mode 
+Ld = splig(xg,yg,dx,dy,mask_g,dirichlet_matrix_action) # Dirichlet mode 
 print(f"")
 print(f"----------------------------")
 print(f"Building neumann mode matrix")
 print(f"----------------------------")
-Ln = splig(xc,yc,mask_c,neumann_matrix_action) # Neumann mode 
+Ln = splig(xc,yc,dx,dy,mask_c,neumann_matrix_action) # Neumann mode 
 print(f"")
 
 # Write structures to file

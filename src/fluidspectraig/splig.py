@@ -50,6 +50,7 @@ class splig:
       self.y = y
       self.dx = dx
       self.dy = dy
+      self.area = self.mask*self.dx*self.dy
 
       # Create array to get matrix row from i,j grid indices
       self.matrix_row = ma.array( np.ones((nx,ny)), dtype=np.int32, order='C', mask=np.abs(mask-1),fill_value=-1 ).cumsum().reshape((nx,ny))-1

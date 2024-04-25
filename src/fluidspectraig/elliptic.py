@@ -66,6 +66,22 @@ def laplacian_g(f, maskz, dx, dy):
         (1,1,1,1), mode='constant', value=0.)*maskz
 
 
+def TtoU(f):
+    """Interpolates from arakawa c-grid tracer point to u-point.
+    Input is first padded in the x-direction to prolong the data
+    past the boundaries, consistent with homogeneous neumann conditions
+    for data at tracer points. """
+    fpad = F.pad( f[...,:,:], (0,0,1,1), mode='replicate')
+    return 0.5*(fpad[...,1:,:]+fpad[...,:-1,:])
+
+def TtoV(f):
+    """Interpolates from arakawa c-grid tracer point to v-point.
+    Input is first padded in the x-direction to prolong the data
+    past the boundaries, consistent with homogeneous neumann conditions
+    for data at tracer points. """
+    fpad = F.pad( f, (1,1,0,0), mode='replicate')
+    return 0.5*(fpad[...,:,1:]+fpad[...,:,:-1])       
+
 def vorticity_cgrid(u,v,maskz,dx,dy):
     return (dfdx_v(v,dx) - dfdy_u(u,dy))*maskz
 

@@ -3,7 +3,7 @@
 #  * We use the ELPA solver to get all of the eigenpairs
 #  * 768x960 case needs > 360 GB memory -- run on GCE instance
 
-CASE_DIR=mqgeometry_doublegyre-octagon/256x256
+CASE_DIR=square_domain/16x16
 NP=12
 
 # Compute the dirichlet modes

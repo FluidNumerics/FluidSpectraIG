@@ -3,16 +3,16 @@
 import numpy as np
 import torch
 from fluidspectraig.splig import splig, splig_load
-from fluidspectraig.elliptic import vorticity_cgrid, divergence_cgrid
+from fluidspectraig.elliptic import vorticity_cgrid, divergence_cgrid, TtoU, TtoV
 import h5py
 
-def norm(u):
+def norm(u,area):
     """Calculates the magnitude of grid data"""
-    return  torch.sqrt( torch.sum(u*u) )
+    return  torch.sqrt( torch.sum(u*u*area) )
 
-def dot(u,v):
+def dot(u,v,area):
     """Performs dot product on grid data"""
-    return torch.sum( u*v )
+    return torch.sum( u*v*area )
 
 class NMA:
     """Normal Mode Analysis class"""
@@ -182,7 +182,7 @@ class NMA:
         
 
         divu = torch.masked_select( self.divergence(u,v,self.mask_n,self.splig_n.dx,self.splig_n.dy), self.mask_n == 1 )
-        
+        flat_area = torch.masked_select( torch.from_numpy(self.splig_n.area), self.mask_n == 1)
         db_m = np.zeros(
             (self.neval_n), dtype=np.float64
         )  # Projection of divergence onto the neumann modes (boundary)
@@ -190,17 +190,32 @@ class NMA:
             (self.neval_n), dtype=np.float64
         )  # Projection of divergence onto the neumann modes (interior)
 
+        # Interior divergence contribution
         for k in np.arange(self.neval_n):
-            ek = self.get_flat_neumann_mode(k)
-            di_m[k] = self.inner_product(divu,ek)  # Projection of divergence onto the neumann modes
+            g = self.get_flat_neumann_mode(k)
+            gmag = self.norm( g, flat_area )
+            ek = g/gmag
+            di_m[k] = self.inner_product(divu,ek,flat_area)  # Projection of divergence onto the neumann modes
 
-            # [TO DO]
-            # Need to map the neumann mode from the tracer points to u-points and v-points
-            # Then we need to compute int_( div( \vec{u} e_k ) )
-            #db_m[k] = -np.sum(divUEta * self.rac)
+
+        # Boundary divergence contribution
+        for k in np.arange(self.neval_n):
+            g = self.get_neumann_mode(k).data
+            gmag = np.sqrt(np.sum(g*g*self.splig_n.area)) # compute the norm
+            ek = g/gmag # normalize
+            #ek = torch.from_numpy(self.get_neumann_mode(k).data).reshape(1,self.splig_n.nx,self.splig_n.ny)
+            ek = torch.from_numpy(ek).reshape(1,self.splig_n.nx,self.splig_n.ny)
+            # Map the neumann mode from the tracer points to u-points and v-points
+            eku = TtoU(ek)*u
+            ekv = TtoV(ek)*v
+            # Compute \div( \vec{u} e_k )
+            divuek = torch.masked_select( self.divergence(eku,ekv,self.mask_n,self.splig_n.dx,self.splig_n.dy), self.mask_n == 1 )
+            # Then we need to compute -\int( \div( \vec{u} e_k ) dA )
+            db_m[k] = -torch.sum(divuek*flat_area)
 
 
         vort = torch.masked_select( self.vorticity(u,v,self.mask_d,self.splig_d.dx,self.splig_d.dy), self.mask_d == 1 )
+        flat_area = torch.masked_select( torch.from_numpy(self.splig_d.area), self.mask_d == 1)
 
         vb_m = np.zeros(
             (self.neval_d), dtype=np.float64
@@ -210,8 +225,10 @@ class NMA:
         )  # Projection of vorticity onto the dirichlet modes (interior)
 
         for k in np.arange(self.neval_d):
-            ek = self.get_flat_dirichlet_mode(k)
-            vi_m[k] = self.inner_product(vort,ek) # Projection of vorticity onto the dirichlet modes
+            g = self.get_flat_dirichlet_mode(k)
+            gmag = self.norm(g,flat_area)
+            ek = g/gmag
+            vi_m[k] = self.inner_product(vort,ek,flat_area) # Projection of vorticity onto the dirichlet modes
 
         # Calculate the energy associated with interior vorticity
         Edi = 0.5 * di_m * di_m / self.eval_n
