@@ -70,4 +70,4 @@ def vorticity_cgrid(u,v,maskz,dx,dy):
     return (dfdx_v(v,dx) - dfdy_u(u,dy))*maskz
 
 def divergence_cgrid(u,v,maskc,dx,dy):
-    return (dfdx_u(v,dx) + dfdy_v(v,dy))*maskc
+    return (dfdx_u(u,dx) + dfdy_v(v,dy))*maskc
