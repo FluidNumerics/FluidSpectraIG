@@ -3,7 +3,8 @@
 import numpy as np
 import torch
 from fluidspectraig.splig import splig, splig_load
-from fluidspectraig.elliptic import vorticity_cgrid, divergence_cgrid, TtoU, TtoV
+import fluidspectraig.tuml as tuml
+#from fluidspectraig.tuml import vorticity_cgrid, divergence_cgrid, TtoU, TtoV
 import h5py
 
 def norm(u,area):
@@ -33,13 +34,17 @@ class NMA:
 
         self.case_directory = "./"
 
-        # Set the methods for vorticity and divergence calculation
-        self.vorticity = vorticity_cgrid
-        self.divergence = divergence_cgrid
-
         # Set the inner_product and norm definitions
         self.inner_product = dot
         self.norm = norm
+
+        self.model = tuml
+
+        # Set the methods for vorticity and divergence calculation
+        self.vorticity = self.model.vorticity_cgrid
+        self.divergence = self.model.divergence_cgrid
+        self.TtoU = self.model.TtoU
+        self.TtoV = self.model.TtoV
 
 
     def load(self, case_directory):
@@ -50,10 +55,10 @@ class NMA:
         self.case_directory = case_directory
         self.splig_d = splig_load(f"{case_directory}/dirichlet")
         self.mask_d = torch.from_numpy(self.splig_d.mask)
-        print(f"Loading dirichlet mode eigenvectors from {case_directory}/dirichlet.evec.hdf5")
-        self.evec_d = h5py.File(f"{case_directory}/dirichlet.evec.hdf5",'r')
-        print(f"Loading dirichlet mode eigenvalues from {case_directory}/dirichlet.eval.hdf5")
-        fobj = h5py.File(f"{case_directory}/dirichlet.eval.hdf5",'r')
+        print(f"Loading dirichlet mode eigenvectors from {case_directory}/dirichlet.evec.h5")
+        self.evec_d = h5py.File(f"{case_directory}/dirichlet.evec.h5",'r')
+        print(f"Loading dirichlet mode eigenvalues from {case_directory}/dirichlet.eval.h5")
+        fobj = h5py.File(f"{case_directory}/dirichlet.eval.h5",'r')
         obj_key = Filter(fobj.keys(),['eigr'])[0]
         self.eval_d = fobj[obj_key][:]
 
@@ -67,10 +72,10 @@ class NMA:
 
         self.splig_n = splig_load(f"{case_directory}/neumann")
         self.mask_n = torch.from_numpy(self.splig_n.mask)
-        print(f"Loading neumann mode eigenvectors from {case_directory}/neumann.evec.hdf5")
-        self.evec_n = h5py.File(f"{case_directory}/neumann.evec.hdf5",'r')
-        print(f"Loading neumann mode eigenvalues from {case_directory}/neumann.eval.hdf5")
-        fobj = h5py.File(f"{case_directory}/neumann.eval.hdf5",'r')
+        print(f"Loading neumann mode eigenvectors from {case_directory}/neumann.evec.h5")
+        self.evec_n = h5py.File(f"{case_directory}/neumann.evec.h5",'r')
+        print(f"Loading neumann mode eigenvalues from {case_directory}/neumann.eval.h5")
+        fobj = h5py.File(f"{case_directory}/neumann.eval.h5",'r')
         obj_key = Filter(fobj.keys(),['eigr'])[0]
         self.eval_n = fobj[obj_key][:]
 
@@ -206,8 +211,8 @@ class NMA:
             #ek = torch.from_numpy(self.get_neumann_mode(k).data).reshape(1,self.splig_n.nx,self.splig_n.ny)
             ek = torch.from_numpy(ek).reshape(1,self.splig_n.nx,self.splig_n.ny)
             # Map the neumann mode from the tracer points to u-points and v-points
-            eku = TtoU(ek)*u
-            ekv = TtoV(ek)*v
+            eku = self.TtoU(ek)*u
+            ekv = self.TtoV(ek)*v
             # Compute \div( \vec{u} e_k )
             divuek = torch.masked_select( self.divergence(eku,ekv,self.mask_n,self.splig_n.dx,self.splig_n.dy), self.mask_n == 1 )
             # Then we need to compute -\int( \div( \vec{u} e_k ) dA )
@@ -271,6 +276,10 @@ class NMA:
         import matplotlib.pyplot as plt
         import math
 
+        plot_dir = f'{self.case_directory}/eigenmodes'
+        if not os.path.exists(plot_dir):
+            os.makedirs(plot_dir)
+
         for k in range(int(math.ceil(self.neval_n/6))):
             f,a = plt.subplots(3,2)
             for j in range(6):
@@ -281,7 +290,7 @@ class NMA:
                     a.flatten()[j].set_title(f'e_{6*k+j}')
 
             plt.tight_layout()
-            plt.savefig(f'{self.case_directory}/neumann_modes_{k}.png')
+            plt.savefig(f'{plot_dir}/neumann_modes_{k}.png')
             plt.close()
 
         for k in range(int(math.ceil(self.neval_d/6))):
@@ -294,5 +303,5 @@ class NMA:
                     a.flatten()[j].set_title(f'e_{6*k+j}')
 
             plt.tight_layout()
-            plt.savefig(f'{self.case_directory}/dirichlet_modes_{k}.png')
+            plt.savefig(f'{plot_dir}/dirichlet_modes_{k}.png')
             plt.close()

@@ -17,8 +17,8 @@ if not os.path.exists(output_dir):
 # Create the model
 param = {'nx': nx,
          'ny': ny,
-         'Lx': 5120.0, # units are in km
-         'Ly': 5120.0, # units are in km
+         'Lx': 4800.0e3, # units are in km
+         'Ly': 4800.0e3, # units are in km
          'device': 'cpu',
          'dtype': torch.float64}
 

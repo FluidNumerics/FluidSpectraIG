@@ -7,8 +7,8 @@ from fluidspectraig.tuml import TUML
 from fluidspectraig.splig import splig
 import os
 
-nx = 16
-ny = 16
+nx = 128
+ny = 128
 
 output_dir = f"square_domain/{nx}x{ny}"
 if not os.path.exists(output_dir):

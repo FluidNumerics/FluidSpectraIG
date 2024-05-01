@@ -14,14 +14,14 @@ import torch
 import matplotlib.pyplot as plt
 import numpy as np
 import numpy.ma as ma
-from fluidspectraig.tuml import TUML
+from fluidspectraig.mitgcm import MITgcm
 from fluidspectraig.splig import splig
 import os
 
-nx = 1024
-ny = 1024
+nx = 64
+ny = 64
 
-output_dir = f"mqgeometry_doublegyre-squarebasin/{nx}x{ny}"
+output_dir = f"mitgcm-squarebasin-test/{nx}x{ny}"
 if not os.path.exists(output_dir):
     os.makedirs(output_dir)
 
@@ -33,14 +33,14 @@ param = {'nx': nx,
          'device': 'cpu',
          'dtype': torch.float64}
 
-model = TUML(param)
+model = MITgcm(param)
 
 # Getting the dirichlet mode mask, grid, and laplacian operator.
 mask_g = model.masks.psi.type(torch.int32).squeeze().cpu().numpy()
 xg = model.xg.cpu().numpy()
 yg = model.yg.cpu().numpy()
-dx = model.dx.cpu().numpy()
-dy = model.dy.cpu().numpy()
+dx = model.dx
+dy = model.dy
 dirichlet_matrix_action = model.apply_laplacian_g
 
 mask_c = model.masks.q.type(torch.int32).squeeze().cpu().numpy()
