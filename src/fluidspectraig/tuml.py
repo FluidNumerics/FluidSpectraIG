@@ -173,6 +173,7 @@ class TUML:
 
         self.dx = torch.tensor(self.Lx / self.nx, **self.arr_kwargs)
         self.dy = torch.tensor(self.Ly / self.ny, **self.arr_kwargs)
+        
 
         self.xc, self.yc = torch.meshgrid(torch.linspace(self.dx*0.5, self.Lx-self.dx*0.5, self.nx, **self.arr_kwargs),
                                         torch.linspace(self.dy*0.5, self.Ly-self.dy*0.5, self.ny, **self.arr_kwargs),
@@ -180,6 +181,8 @@ class TUML:
 
         mask = param['mask'] if 'mask' in param.keys()  else torch.ones(self.nx, self.ny)
         self.masks = Masks(mask.type(self.dtype).to(self.device))
+        self.area_n = self.masks.q*self.dx*self.dy # area of neumann mode cells
+        self.area_d = self.masks.psi*self.dx*self.dy # area of dirichlet mode cells
 
         # precompile torch functions
         comp =  torch.__version__[0] == '2'
@@ -191,17 +194,32 @@ class TUML:
                  f'{torch.__version__}, the solver will be slower! ')
 
 
-    def apply_laplacian_c(self,x):
+    def apply_laplacian_n(self,x):
+        """Laplacian with neumann boundary conditions"""
         return -self.laplacian_c(x,self.masks.u,self.masks.v,self.dx,self.dy)*self.masks.q.squeeze()
 
 
-    def apply_laplacian_g(self,f):
+    def apply_laplacian_d(self,f):
+        """Laplacian with dirichlet boundary conditions"""
         fm_g = self.masks.psi.squeeze()*f # Mask the data to apply homogeneous dirichlet boundary conditions
         return -self.masks.psi.squeeze()*self.laplacian_g(fm_g,self.masks.psi,self.dx,self.dy)
 
-    def model_area_g(self):
-        return torch.sum( self.masks.psi*self.dx*self.dy ) 
+    def vorticity(self,u,v):
+        return vorticity_cgrid(u,v,self.masks.psi,self.dx,self.dy)
+
+    def divergence(self,u,v):
+        return divergence_cgrid(u,v,self.masks.q,self.dx,self.dy)
+
+    def map_T_to_U(self,f):
+        return TtoU(f)
+
+    def map_T_to_V(self,f):
+        return TtoV(f)
+
+    def total_area_d(self):
+        return torch.sum( self.area_d ) 
     
-    def model_area_c(self):
-        return torch.sum( self.masks.q*self.dx*self.dy ) 
+    def total_area_n(self):
+        return torch.sum( self.area_n ) 
+
 

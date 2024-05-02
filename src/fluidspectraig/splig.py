@@ -31,11 +31,11 @@ def splig_load(filename_base):
     filename = f"{filename_base}.npz"
     print(f"Loading SPLIG from {filename}")
     with np.load(filename) as data:
-         return splig( x = data['x'], y = data['y'], dx = data['dx'], dy = data['dy'], mask = data['mask'] )
+         return splig( mask = data['mask'] )
 
 class splig:
     """ Sparse Laplacian - Irregular Geometry """
-    def __init__(self, x, y, dx, dy, mask, action=None, dtype=torch.float64, device='cpu' ):
+    def __init__(self, mask, action=None, dtype=torch.float64, device='cpu' ):
  
       nx, ny = mask.shape
       self.nx = nx
@@ -46,11 +46,6 @@ class splig:
       self.arr_kwargs = {'dtype':self.dtype, 'device': self.device}
       self.mask = mask
       self.matrix_action = action
-      self.x = x
-      self.y = y
-      self.dx = dx
-      self.dy = dy
-      self.area = self.mask*self.dx*self.dy
 
       # Create array to get matrix row from i,j grid indices
       self.matrix_row = ma.array( np.ones((nx,ny)), dtype=np.int32, order='C', mask=np.abs(mask-1),fill_value=-1 ).cumsum().reshape((nx,ny))-1
@@ -88,7 +83,7 @@ class splig:
 
         # Write the grid, mask, impulse fields, impulse response fields, and other object attributes to np file.
         filename = f"{filename_base}.npz"
-        np.savez(filename,x=self.x,y=self.y,dx=self.dx,dy=self.dy,mask=self.mask,
+        np.savez(filename, mask=self.mask,
             matrix_row=self.matrix_row,ndof=self.ndof,
             i_indices=self.i_indices,j_indices=self.j_indices,
             impulse=self.impulse.cpu().numpy(),irf=self.irf.cpu().numpy())

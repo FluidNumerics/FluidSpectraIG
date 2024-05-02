@@ -15,68 +15,45 @@ import matplotlib.pyplot as plt
 import numpy as np
 import numpy.ma as ma
 from fluidspectraig.mitgcm import MITgcm
-from fluidspectraig.splig import splig
+from fluidspectraig.nma import NMA
 import os
 
 nx = 64
 ny = 64
 
-output_dir = f"mitgcm-squarebasin-test/{nx}x{ny}"
-if not os.path.exists(output_dir):
-    os.makedirs(output_dir)
+case_dir = f"mitgcm-squarebasin-test/{nx}x{ny}"
+if not os.path.exists(case_dir):
+    os.makedirs(case_dir)
 
 # Create the model
 param = {'nx': nx,
          'ny': ny,
          'Lx': 4800.0e3, # units are in m
          'Ly': 4800.0e3, # units are in m
+         'case_directory': case_dir,
          'device': 'cpu',
          'dtype': torch.float64}
 
-model = MITgcm(param)
+nma_obj = NMA(param,model=MITgcm)
+nma_obj.construct_splig()
+nma_obj.write() # Save the nma_obj to disk in the case directory
 
-# Getting the dirichlet mode mask, grid, and laplacian operator.
-mask_g = model.masks.psi.type(torch.int32).squeeze().cpu().numpy()
-xg = model.xg.cpu().numpy()
-yg = model.yg.cpu().numpy()
-dx = model.dx
-dy = model.dy
-dirichlet_matrix_action = model.apply_laplacian_g
 
-mask_c = model.masks.q.type(torch.int32).squeeze().cpu().numpy()
-xc = model.xc.cpu().numpy()
-yc = model.yc.cpu().numpy()
-neumann_matrix_action = model.apply_laplacian_c
-
-print(f"------------------------------")
-print(f"Building dirichlet mode matrix")
-print(f"------------------------------")
-Ld = splig(xg,yg,dx,dy,mask_g,dirichlet_matrix_action) # Dirichlet mode 
-print(f"")
-print(f"----------------------------")
-print(f"Building neumann mode matrix")
-print(f"----------------------------")
-Ln = splig(xc,yc,dx,dy,mask_c,neumann_matrix_action) # Neumann mode 
-print(f"")
-
-# Write structures to file
-filename = f"{output_dir}/dirichlet"
-Ld.write(filename)
-
-filename = f"{output_dir}/neumann"
-Ln.write(filename)
 
 # Save a few plots for reference
 # Plot the mask
 plt.figure()
-plt.imshow(mask_g,interpolation='nearest', aspect='equal')
+plt.imshow(nma_obj.mask_d,interpolation='nearest', aspect='equal')
 plt.colorbar(fraction=0.046,location='right')
-plt.savefig(f'{output_dir}/dirichlet-mask.png')
+plt.savefig(f'{case_dir}/dirichlet-mask.png')
 plt.close()
 
 plt.figure()
-plt.imshow(mask_c,interpolation='nearest', aspect='equal')
+plt.imshow(nma_obj.mask_n,interpolation='nearest', aspect='equal')
 plt.colorbar(fraction=0.046,location='right')
-plt.savefig(f'{output_dir}/neumann-mask.png')
+plt.savefig(f'{case_dir}/neumann-mask.png')
 plt.close()
 
+## [TO DO]
+# 
+# Generate instructions for computing eigenpairs using the provided binary #

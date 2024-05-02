@@ -14,42 +14,45 @@ import torch
 import matplotlib.pyplot as plt
 import numpy as np
 import numpy.ma as ma
-from fluidspectraig.tuml import TUML
+from fluidspectraig.mitgcm import MITgcm
 from fluidspectraig.nma import NMA
 import os
 
-nx = 256
-ny = 256
 
-case_dir = f"mqgeometry_doublegyre-squarebasin/{nx}x{ny}"
+case_dir = "mitgcm-100-z75"
+model_dir = "mitgcm-100-z75/production"
 if not os.path.exists(case_dir):
     os.makedirs(case_dir)
 
 # Create the model
-param = {'nx': nx,
-         'ny': ny,
-         'Lx': 4800.0e3, # units are in m
-         'Ly': 4800.0e3, # units are in m
-         'case_directory': case_dir,
+param = {'case_directory': case_dir,
+         'model_directory': model_dir,
          'device': 'cpu',
          'dtype': torch.float64}
 
-nma_obj = NMA(param,model=TUML)
-nma_obj.construct_splig()
-nma_obj.write() # Save the nma_obj to disk in the case directory
+nma_obj = NMA(param,model=MITgcm)
+
+#nma_obj.construct_splig()
+#nma_obj.write() # Save the nma_obj to disk in the case directory
+
 
 
 # Save a few plots for reference
 # Plot the mask
 plt.figure()
-plt.imshow(nma_obj.mask_d,interpolation='nearest', aspect='equal')
+mask_d = nma_obj.model.masks.psi.type(torch.int32).squeeze().cpu().numpy()
+plt.imshow(mask_d,interpolation='nearest', aspect='equal')
 plt.colorbar(fraction=0.046,location='right')
 plt.savefig(f'{case_dir}/dirichlet-mask.png')
 plt.close()
 
 plt.figure()
-plt.imshow(nma_obj.mask_n,interpolation='nearest', aspect='equal')
+mask_n = nma_obj.model.masks.q.type(torch.int32).squeeze().cpu().numpy()
+plt.imshow(mask_n,interpolation='nearest', aspect='equal')
 plt.colorbar(fraction=0.046,location='right')
 plt.savefig(f'{case_dir}/neumann-mask.png')
 plt.close()
 
+## [TO DO]
+# 
+# Generate instructions for computing eigenpairs using the provided binary #
